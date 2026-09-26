@@ -4,7 +4,7 @@ import { api, AuthError } from './api';
 import type { ExtractData } from './api';
 import { $, esc, copyText, fmtRes } from './ui';
 
-export type Mode = 'manifest' | 'info' | 'covers';
+export type Mode = 'manifest' | 'info' | 'covers' | 'screenshots';
 
 interface HistEntry {
   url: string;
@@ -106,6 +106,7 @@ function headerLabel(d: ExtractData): { site: string; t: string } {
 function render(d: ExtractData): void {
   if (mode === 'info') return renderInfo(d);
   if (mode === 'covers') return renderCovers(d);
+  if (mode === 'screenshots') return renderScreenshots(d);
   return renderManifest(d);
 }
 
@@ -239,6 +240,35 @@ function renderCovers(d: ExtractData): void {
   resultBody.querySelectorAll('[data-open]').forEach((b) => {
     (b as HTMLElement).onclick = () => void copyText((b as HTMLElement).dataset.open || '', 'Copied cover URL');
   });
+}
+
+function renderScreenshots(d: ExtractData): void {
+  const shots = d.screenshots || [];
+  resultBody.innerHTML = `
+    <div class="section-label">Screenshots (${shots.length})</div>
+    ${
+      shots.length
+        ? `<div class="shots">${shots
+            .map(
+              (s, i) =>
+                `<img src="${esc(s.thumb)}" data-full="${esc(s.full)}" title="Click for full size (${i + 1}/${shots.length})" loading="lazy" />`,
+            )
+            .join('')}</div>`
+        : '<div class="error-box">No screenshots found. Scene pages carry stills — movie pages do not.</div>'
+    }
+    ${
+      shots.length
+        ? `<div class="footer">
+      <button class="action-pill-btn" id="btnCopyShots">Copy all URLs</button>
+    </div>`
+        : ''
+    }`;
+  resultBody.querySelectorAll('.shots img').forEach((img) => {
+    (img as HTMLElement).onclick = () => window.open((img as HTMLElement).dataset.full || '', '_blank');
+  });
+  const btn = document.getElementById('btnCopyShots');
+  if (btn)
+    btn.onclick = () => void copyText(shots.map((s) => s.full).join('\n'), `Copied ${shots.length} URLs`);
 }
 
 // ── Modes ──

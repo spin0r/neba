@@ -57,6 +57,13 @@ EA_MOVIE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Scene screenshot thumbs: https://caps1cdn.adultempire.com/n/0399/10/5090399_06670_10.jpg
+# Full size:                            .../n/0399/1280/5090399_06670_1280c.jpg
+_EA_THUMB_RE = re.compile(
+    r"https://caps\d?cdn\.adultempire\.com/n/(\d+)/(10|320)/(\d+)_(\d+)_(?:10|320)\.jpg",
+    re.IGNORECASE,
+)
+
 # Extract player init params from HTML — handles both item/item_id and scene/scene_id
 _PLAYER_INIT_RE = re.compile(
     r"AEVideoPlayer\([^)]*\{[^}]*"
@@ -297,8 +304,7 @@ def extract_ade_duration_seconds(
     return 0
 
 
-def resolve_ade_title(
-    base_title: str,
+def resolve_ade_title(    base_title: str,
     item_detail: dict[str, Any],
     scene_id: str | int | None = None,
 ) -> str:
@@ -313,6 +319,70 @@ def resolve_ade_title(
                 return f"{base_title} — {sc_title}"
             break
     return base_title
+
+
+def _extract_ea_screenshots(html: str) -> list[dict[str, str]]:
+    """Extract scene screenshot (thumb, full) pairs from an Elegant Angel page.
+
+    Thumbs (width 10/320) dedupe to one entry per frame; full-size URL is the
+    1280c variant, e.g. .../n/0399/1280/5090399_06670_1280c.jpg
+    """
+    seen: set[tuple[str, str]] = set()
+    shots: list[dict[str, str]] = []
+    for m in _EA_THUMB_RE.finditer(html):
+        host = m.group(0).split("/n/")[0]
+        gallery, master, offset = m.group(1), m.group(3), m.group(4)
+        key = (master, offset)
+        if key in seen:
+            continue
+        seen.add(key)
+        shots.append({
+            "thumb": m.group(0),
+            "full": f"{host}/n/{gallery}/3840/{master}_{offset}_3840.jpg",
+        })
+    return shots
+
+
+def _synth_screenshots(item_detail: dict[str, Any], scene_id: str | int | None = None, limit: int = 40) -> list[dict[str, str]]:
+    """Synthesize screenshot URLs from verify data (works for any ADE/EA title).
+
+    Uses master_id + frames interval + scene boundaries to build caps CDN URLs.
+    """
+    master = str(item_detail.get("master_id") or "")
+    if not master.isdigit():
+        return []
+    frames = item_detail.get("frames") or {}
+    try:
+        interval = max(int(frames.get("interval") or 10), 10)
+    except (TypeError, ValueError):
+        interval = 10
+
+    start, end = 0, 0
+    if scene_id:
+        for sc in item_detail.get("scenes", []):
+            if str(sc.get("id")) == str(scene_id):
+                start, end = int(sc.get("start_seconds") or 0), int(sc.get("end_seconds") or 0)
+                break
+    else:
+        scenes = item_detail.get("scenes", [])
+        if scenes:
+            end = int(scenes[-1].get("end_seconds") or 0)
+    if end <= start:
+        return []
+
+    duration = end - start
+    step = max(interval, round(duration / 30 / interval) * interval or interval)
+    gallery = master[-4:]
+    shots: list[dict[str, str]] = []
+    offset = (start // step) * step
+    while offset <= end and len(shots) < limit:
+        tag = f"{offset:05d}"
+        shots.append({
+            "thumb": f"https://caps1cdn.adultempire.com/n/{gallery}/320/{master}_{tag}_320c.jpg",
+            "full": f"https://caps1cdn.adultempire.com/n/{gallery}/3840/{master}_{tag}_3840.jpg",
+        })
+        offset += step
+    return shots
 
 
 def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]:
@@ -401,6 +471,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                     "is_authorized": result.get("is_authorized", False),
                     "item_detail": item_detail,
                     "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
+                    "screenshots": _extract_ea_screenshots(html) or _synth_screenshots(item_detail, cur_scene_id),
                 }
         # fallback to preview logic
         return _get_clip_preview(session, scene_id, url, html)
@@ -454,6 +525,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
             "is_authorized": result.get("is_authorized", False),
             "item_detail": item_detail,
             "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
+            "screenshots": _synth_screenshots(item_detail, None),
         }
 
     # Movie/VOD pages: get full VOD stream
@@ -526,6 +598,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         "is_authorized": result.get("is_authorized", False),
         "item_detail": item_detail,
         "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
+        "screenshots": _extract_ea_screenshots(html) or _synth_screenshots(item_detail, scene_id),
     }
 
 

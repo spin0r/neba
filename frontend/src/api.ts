@@ -5,6 +5,11 @@ export interface VariantLink {
   url: string;
 }
 
+export interface Screenshot {
+  thumb: string;
+  full: string;
+}
+
 export interface SceneInfo {
   n: number;
   performers: string[];
@@ -27,6 +32,7 @@ export interface ExtractData {
   resolutions?: number[];
   preferred_links?: VariantLink[];
   covers?: string[];
+  screenshots?: Screenshot[];
   performers?: string[];
   scene_count?: number;
   scenes?: SceneInfo[];

@@ -348,6 +348,7 @@ def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
         "resolutions": resolutions,
         "preferred_links": [{"height": h, "url": u} for h, u in preferred],
         "covers": covers,
+        "screenshots": result.get("screenshots", []),
         "is_authorized": result.get("is_authorized", False),
         "ppm_remaining": result.get("ppm_time_remaining", result.get("ppm_remaining", 0)),
     }
