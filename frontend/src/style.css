@@ -190,6 +190,10 @@ body::after {
   gap: 10px;
 }
 .row:hover { background: var(--item-selected); }
+.row.selected { background: var(--item-selected); outline: 1px solid rgba(255, 255, 255, 0.16); }
+.action-pill-btn.selected { border-color: rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.13); }
+.hero-card.selected { border-color: rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.085); }
+.shots img.selected, .covers img.selected { border-color: rgba(255, 255, 255, 0.35); }
 .row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .row-icon {
   width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;

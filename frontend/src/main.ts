@@ -10,6 +10,10 @@ import {
   showExtractChrome,
   hideExtractBodies,
   refreshExtractVisibility,
+  fetchExtract,
+  moveSelection,
+  activateSelection,
+  resetSelection,
 } from './extract';
 import { renderCookiesPage } from './cookies';
 
@@ -38,6 +42,34 @@ function showPage(next: Page): void {
 
 window.addEventListener('hashchange', () => {
   showPage(location.hash === '#/cookies' ? 'cookies' : 'extract');
+});
+
+// ── Global keyboard: ↑/↓ navigate rows, Enter activates/copies ──
+function resultsVisible(): boolean {
+  return $('resultBody').classList.contains('visible') && $('resultBody').innerHTML !== '';
+}
+
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target as HTMLElement).tagName;
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (document.querySelector('.modal-overlay')) return;
+
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!resultsVisible() || page !== 'extract') return;
+    e.preventDefault();
+    moveSelection(e.key === 'ArrowDown' ? 1 : -1);
+  } else if (e.key === 'Enter') {
+    if (tag === 'INPUT' && (e.target as HTMLInputElement).id === 'urlInput') {
+      // Enter in the URL bar: copy selection if navigating, else fetch
+      if (resultsVisible() && activateSelection()) e.preventDefault();
+      else void fetchExtract();
+    } else if (tag !== 'INPUT' && tag !== 'BUTTON') {
+      if (resultsVisible() && page === 'extract' && activateSelection()) e.preventDefault();
+    }
+  } else if (e.key === 'Escape') {
+    resetSelection();
+    document.querySelectorAll('.selected').forEach((el) => el.classList.remove('selected'));
+  }
 });
 
 // ── Login ──

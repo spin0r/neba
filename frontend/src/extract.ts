@@ -103,7 +103,51 @@ function headerLabel(d: ExtractData): { site: string; t: string } {
   return { site, t };
 }
 
+// ── Keyboard selection: ↑/↓ move, Enter activates, Esc clears ──
+let selIndex = -1;
+
+function selectables(): HTMLElement[] {
+  return Array.from(resultBody.querySelectorAll<HTMLElement>('#heroCopy, [data-copy], [data-open]'));
+}
+
+function paintSelection(): void {
+  const items = selectables();
+  items.forEach((el, i) => el.classList.toggle('selected', i === selIndex));
+  const cur = items[selIndex];
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+export function resetSelection(): void {
+  selIndex = -1;
+}
+
+export function markSelected(el: HTMLElement): void {
+  const items = selectables();
+  const i = items.indexOf(el);
+  if (i >= 0) {
+    selIndex = i;
+    paintSelection();
+  }
+}
+
+export function moveSelection(dir: 1 | -1): boolean {
+  const items = selectables();
+  if (!items.length) return false;
+  selIndex = selIndex < 0 ? (dir > 0 ? 0 : items.length - 1) : (selIndex + dir + items.length) % items.length;
+  paintSelection();
+  return true;
+}
+
+export function activateSelection(): boolean {
+  const items = selectables();
+  const cur = selIndex >= 0 ? items[selIndex] : undefined;
+  if (!cur) return false;
+  cur.click();
+  return true;
+}
+
 function render(d: ExtractData): void {
+  resetSelection();
   if (mode === 'info') return renderInfo(d);
   if (mode === 'covers') return renderCovers(d);
   if (mode === 'screenshots') return renderScreenshots(d);
@@ -219,7 +263,8 @@ function renderCovers(d: ExtractData): void {
       covers.length
         ? `<div class="covers">${covers
             .map(
-              (c, i) => `<img src="${esc(c)}" data-i="${i}" title="Click to open full size" loading="lazy" />`,
+              (c, i) =>
+                `<img src="${esc(c)}" data-i="${i}" data-open="${esc(c)}" title="Click to open full size" loading="lazy" />`,
             )
             .join('')}</div>`
         : '<div class="error-box">No covers found for this title.</div>'
@@ -228,7 +273,7 @@ function renderCovers(d: ExtractData): void {
       ${covers
         .map(
           (c, i) =>
-            `<button class="action-pill-btn" data-open="${esc(c)}">${
+            `<button class="action-pill-btn" data-copy="${esc(c)}">${
               i === 0 ? 'Front' : i === 1 ? 'Back' : 'Cover ' + (i + 1)
             }</button>`,
         )
@@ -237,8 +282,8 @@ function renderCovers(d: ExtractData): void {
   resultBody.querySelectorAll('img[data-i]').forEach((img) => {
     (img as HTMLElement).onclick = () => window.open(covers[Number((img as HTMLElement).dataset.i)], '_blank');
   });
-  resultBody.querySelectorAll('[data-open]').forEach((b) => {
-    (b as HTMLElement).onclick = () => void copyText((b as HTMLElement).dataset.open || '', 'Copied cover URL');
+  resultBody.querySelectorAll('button[data-copy]').forEach((b) => {
+    (b as HTMLElement).onclick = () => void copyText((b as HTMLElement).dataset.copy || '', 'Copied cover URL');
   });
 }
 
@@ -251,7 +296,9 @@ function renderScreenshots(d: ExtractData): void {
         ? `<div class="shots">${shots
             .map(
               (s, i) =>
-                `<img src="${esc(s.thumb)}" data-full="${esc(s.full)}" title="Click for full size (${i + 1}/${shots.length})" loading="lazy" />`,
+                `<img src="${esc(s.thumb)}" data-full="${esc(s.full)}" data-open="${esc(
+                  s.full,
+                )}" title="Click for full size (${i + 1}/${shots.length})" loading="lazy" />`,
             )
             .join('')}</div>`
         : '<div class="error-box">No screenshots found. Scene pages carry stills — movie pages do not.</div>'
@@ -284,14 +331,16 @@ export function initExtractPage(): void {
   document.querySelectorAll('.mode-pill').forEach((p) => {
     ((p as HTMLElement).onclick = () => setMode(((p as HTMLElement).dataset.mode as Mode) || 'manifest'));
   });
+  // Keep mouse clicks and keyboard selection in sync
+  resultBody.addEventListener('click', (e) => {
+    const t = (e.target as HTMLElement).closest('#heroCopy, [data-copy], [data-open]');
+    if (t) markSelected(t as HTMLElement);
+  });
   urlInput.addEventListener('input', () => {
     if (!urlInput.value.trim()) {
       resultBody.classList.remove('visible');
       histBody.classList.add('visible');
     }
-  });
-  urlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') void fetchExtract();
   });
   ($('clearHist') as HTMLElement).onclick = () => {
     localStorage.removeItem(HIST_KEY);
