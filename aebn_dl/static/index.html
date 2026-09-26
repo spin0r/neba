@@ -244,6 +244,17 @@ body::after {
 }
 .cookie-box-title .dot { width: 7px; height: 7px; }
 .cookie-box-sub { font-size: 11px; color: var(--text-sub); margin-bottom: 8px; font-family: var(--mono); }
+.page-pills { display: flex; gap: 6px; }
+.page-pill {
+  font-size: 12px; font-weight: 500; color: var(--text-sub);
+  background: transparent; border: 1px solid transparent;
+  border-radius: 7px; padding: 4px 12px; cursor: pointer;
+  font-family: var(--font); transition: all .15s ease;
+}
+.page-pill:hover { color: #fff; }
+.page-pill.active { color: #fff; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.14); }
+.cookie-page { padding: 4px 4px 8px 4px; }
+.cookie-page .cookie-box { margin: 0 12px 12px 12px; }
 .cookie-area {
   width: 100%; min-height: 130px; resize: vertical;
   background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.12);
@@ -302,7 +313,11 @@ body::after {
   <div class="command-bar" id="commandBar">
     <div class="brand-row">
       <div class="brand">AEBN<span>DL</span></div>
-      <button class="cookie-status" id="cookieBtn" title="Manage cookies">
+      <div class="page-pills">
+        <button class="page-pill active" data-page="extract">Extract</button>
+        <button class="page-pill" data-page="cookies">Cookies</button>
+      </div>
+      <button class="cookie-status" id="cookieBtn" title="Open cookies page">
         <span class="dot" id="cookieDot"></span><span id="cookieLabel">Cookies</span>
       </button>
     </div>
@@ -320,6 +335,7 @@ body::after {
       <span class="mode-hint" id="srcHint"></span>
     </div>
     <div class="body" id="resultBody"></div>
+    <div class="body" id="cookiesPage"></div>
     <div class="body" id="histBody">
       <div class="hist-header">
         <span class="hist-title">Recent links</span>
@@ -568,67 +584,64 @@ function renderCovers(d) {
   });
 }
 
-// ── Cookies modal (separate boxes per site) ──
+// ── Cookies: shared boxes, dedicated page, auto-store on paste ──
 const COOKIE_SITES = [
   { site: 'ade', label: 'AdultDVDEmpire', host: 'adultdvdempire.com', store: 'ae_cookies_ade', file: 'adecookies.txt' },
   { site: 'ea', label: 'Elegant Angel', host: 'elegantangel.com', store: 'ae_cookies_ea', file: 'eacookies.txt' },
 ];
 
-function openCookies() {
-  const ov = document.createElement('div');
-  ov.className = 'modal-overlay';
-  ov.innerHTML = `
-    <div class="modal">
-      <div class="modal-header"><span class="modal-title">Session cookies</span><button class="modal-close" id="mClose">×</button></div>
-      <div class="modal-sub">Export with the <b>Cookie-Editor</b> browser extension in <b>Netscape format</b>
-        from each site, then paste into its box. Browser saves stay in <code>localStorage</code>;
-        <b>Server</b> saves persist on the server (ADE also feeds the Telegram bot).</div>
-      ${COOKIE_SITES.map(s => `
-      <div class="cookie-box" data-site="${s.site}">
-        <div class="cookie-box-title"><span class="dot" id="dot-${s.site}"></span>${s.label}</div>
-        <div class="cookie-box-sub">${s.host} → Netscape export</div>
-        <textarea class="cookie-area" id="area-${s.site}" placeholder="# Netscape HTTP Cookie File&#10;...paste ${s.host} cookies...">${esc(localStorage.getItem(s.store) || '')}</textarea>
-        <div class="cookie-status-line" id="status-${s.site}">Checking server session…</div>
-        <div class="modal-actions">
-          <button class="btn" data-act="import">Import file</button>
-          <button class="btn" data-act="export">Export</button>
-          <button class="btn danger" data-act="clear">Clear</button>
-          <button class="btn" data-act="server">Server</button>
-          <button class="btn primary" data-act="save">Save</button>
-        </div>
-        <input type="file" class="mFile" accept=".txt,.cookies" style="display:none" />
-      </div>`).join('')}
-    </div>`;
-  document.body.appendChild(ov);
-  const close = () => ov.remove();
-  $('mClose').onclick = close;
-  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+function cookieBoxesHTML(prefix) {
+  return COOKIE_SITES.map(s => `
+    <div class="cookie-box" data-site="${s.site}">
+      <div class="cookie-box-title"><span class="dot" id="${prefix}-dot-${s.site}"></span>${s.label}</div>
+      <div class="cookie-box-sub">${s.host} → Netscape export</div>
+      <textarea class="cookie-area" id="${prefix}-area-${s.site}" placeholder="# Netscape HTTP Cookie File&#10;...paste ${s.host} cookies...">${esc(localStorage.getItem(s.store) || '')}</textarea>
+      <div class="cookie-status-line" id="${prefix}-status-${s.site}">Checking server session…</div>
+      <div class="modal-actions">
+        <button class="btn" data-act="import">Import file</button>
+        <button class="btn" data-act="export">Export</button>
+        <button class="btn danger" data-act="clear">Clear</button>
+        <button class="btn" data-act="server">Server</button>
+        <button class="btn primary" data-act="save">Save</button>
+      </div>
+      <input type="file" class="mFile" accept=".txt,.cookies" style="display:none" />
+    </div>`).join('');
+}
 
-  api('/api/cookies').then(r => {
-    for (const s of COOKIE_SITES) {
-      const st = (r && r[s.site]) || {};
-      const dot = $(`dot-${s.site}`);
-      const el = $(`status-${s.site}`);
-      if (!dot || !el) continue;
-      if (!st.configured) { el.textContent = 'No server session saved.'; continue; }
-      dot.classList.add('ok');
-      el.classList.add('ok');
-      const exp = st.expiry ? `expiry ${st.expiry.date}${st.expiry.expired ? ' (EXPIRED)' : ''}` : 'no expiry parsed';
-      const acc = st.account ? ` · ${st.account.email} · ${st.account.total_ppm} min` : (st.account_error ? ' · account lookup failed' : '');
-      el.textContent = `Server session active — ${exp}${acc}`;
-    }
-  }).catch(() => {
-    for (const s of COOKIE_SITES) {
-      const el = $(`status-${s.site}`);
-      if (el) el.textContent = 'Could not reach server.';
-    }
-  });
+function storeCookies(cfg, value, quiet = false) {
+  if (value && !value.includes('etoken')) {
+    if (!quiet) toast('No etoken found in pasted cookies', true);
+    return false;
+  }
+  if (value) localStorage.setItem(cfg.store, value);
+  else localStorage.removeItem(cfg.store);
+  refreshCookieBadge();
+  return true;
+}
 
-  ov.querySelectorAll('.cookie-box').forEach(box => {
+function wireCookieBoxes(root, prefix) {
+  root.querySelectorAll('.cookie-box').forEach(box => {
     const site = box.dataset.site;
     const cfg = COOKIE_SITES.find(x => x.site === site);
     const area = box.querySelector('textarea');
     const fileInput = box.querySelector('.mFile');
+    let debounce;
+
+    // Auto-store: pasting cookies saves them in this browser immediately
+    area.addEventListener('paste', () => {
+      setTimeout(() => {
+        if (storeCookies(cfg, area.value.trim(), true))
+          toast(`${cfg.label} cookies stored — tap Server to persist`);
+      }, 50);
+    });
+    area.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        const v = area.value.trim();
+        if (v && v.includes('etoken')) storeCookies(cfg, v, true);
+      }, 1500);
+    });
+
     box.querySelectorAll('[data-act]').forEach(btn => {
       btn.onclick = async () => {
         const act = btn.dataset.act;
@@ -646,11 +659,8 @@ function openCookies() {
           return;
         }
         if (act === 'save') {
-          const v = area.value;
-          if (v && !v.includes('etoken')) { toast('No etoken found in pasted cookies', true); return; }
-          if (v) localStorage.setItem(cfg.store, v); else localStorage.removeItem(cfg.store);
-          refreshCookieBadge();
-          toast(`${cfg.label} cookies saved in browser`);
+          if (storeCookies(cfg, area.value.trim()))
+            toast(`${cfg.label} cookies saved in browser`);
           return;
         }
         if (act === 'server') {
@@ -659,9 +669,9 @@ function openCookies() {
           const r = await api('/api/cookies', { method: 'POST', body: JSON.stringify({ site, cookies: v }) });
           if (r.success) {
             toast(`${cfg.label} server session saved`);
-            const el = $(`status-${site}`);
+            const el = root.querySelector(`#${prefix}-status-${site}`) || $(`${prefix}-status-${site}`);
             if (el) { el.classList.add('ok'); el.textContent = 'Server session active.'; }
-            const dot = $(`dot-${site}`);
+            const dot = root.querySelector(`#${prefix}-dot-${site}`);
             if (dot) dot.classList.add('ok');
             refreshCookieBadge();
           } else toast(r.error || 'Save failed', true);
@@ -681,12 +691,81 @@ function openCookies() {
       const f = e.target.files[0];
       if (!f) return;
       const rd = new FileReader();
-      rd.onload = () => { area.value = rd.result; toast('File loaded — review & save'); };
+      rd.onload = () => {
+        area.value = rd.result;
+        if (storeCookies(cfg, String(rd.result).trim(), true))
+          toast('File loaded & stored — tap Server to persist');
+        else
+          toast('File loaded — review & save');
+      };
       rd.readAsText(f);
     };
   });
 }
-$('cookieBtn').onclick = openCookies;
+
+function refreshServerStatus(root, prefix) {
+  api('/api/cookies').then(r => {
+    for (const s of COOKIE_SITES) {
+      const st = (r && r[s.site]) || {};
+      const dot = root.querySelector(`#${prefix}-dot-${s.site}`);
+      const el = root.querySelector(`#${prefix}-status-${s.site}`);
+      if (!dot || !el) continue;
+      if (!st.configured) { el.textContent = 'No server session saved.'; continue; }
+      dot.classList.add('ok');
+      el.classList.add('ok');
+      const exp = st.expiry ? `expiry ${st.expiry.date}${st.expiry.expired ? ' (EXPIRED)' : ''}` : 'no expiry parsed';
+      const acc = st.account ? ` · ${st.account.email} · ${st.account.total_ppm} min` : (st.account_error ? ' · account lookup failed' : '');
+      el.textContent = `Server session active — ${exp}${acc}`;
+    }
+  }).catch(() => {
+    for (const s of COOKIE_SITES) {
+      const el = root.querySelector(`#${prefix}-status-${s.site}`);
+      if (el) el.textContent = 'Could not reach server.';
+    }
+  });
+}
+
+// ── Page router: extract | cookies ──
+let page = 'extract';
+const cookiesPage = $('cookiesPage');
+let cookiesPageBuilt = false;
+
+function showPage(next) {
+  page = next;
+  document.querySelectorAll('.page-pill').forEach(p => p.classList.toggle('active', p.dataset.page === next));
+  const onCookies = next === 'cookies';
+  document.querySelector('.input-row').style.display = onCookies ? 'none' : '';
+  $('modeRow').style.display = onCookies ? 'none' : '';
+  resultBody.classList.toggle('visible', !onCookies && resultBody.innerHTML !== '');
+  histBody.classList.toggle('visible', !onCookies && !urlInput.value.trim() && authed && resultBody.innerHTML === '');
+  cookiesPage.classList.toggle('visible', onCookies);
+  if (onCookies && authed) {
+    if (!cookiesPageBuilt) {
+      cookiesPage.innerHTML = `
+        <div class="section-label">Cookies — paste once, stored automatically</div>
+        <div class="cookie-page">${cookieBoxesHTML('pg')}</div>`;
+      wireCookieBoxes(cookiesPage, 'pg');
+      cookiesPageBuilt = true;
+    } else {
+      // refresh textarea values from storage in case another tab changed them
+      for (const s of COOKIE_SITES) {
+        const area = cookiesPage.querySelector(`#pg-area-${s.site}`);
+        if (area && !area.value) area.value = localStorage.getItem(s.store) || '';
+      }
+    }
+    refreshServerStatus(cookiesPage, 'pg');
+    if (location.hash !== '#/cookies') history.replaceState(null, '', '#/cookies');
+  } else if (!onCookies && location.hash === '#/cookies') {
+    history.replaceState(null, '', location.pathname);
+  }
+}
+document.querySelectorAll('.page-pill').forEach(p => {
+  p.onclick = () => showPage(p.dataset.page);
+});
+window.addEventListener('hashchange', () => {
+  showPage(location.hash === '#/cookies' ? 'cookies' : 'extract');
+});
+$('cookieBtn').onclick = () => showPage('cookies');
 
 async function refreshCookieBadge() {
   const localAde = localStorage.getItem('ae_cookies_ade');
@@ -711,6 +790,7 @@ function showLogin() {
   $('loginBody').classList.add('visible');
   resultBody.classList.remove('visible');
   histBody.classList.remove('visible');
+  cookiesPage.classList.remove('visible');
 }
 async function doLogin() {
   const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('loginPass').value }) }).catch(() => null);
@@ -730,7 +810,8 @@ $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLog
   renderHist();
   try {
     await api('/api/auth-check');
-    histBody.classList.add('visible');
+    if (location.pathname === '/cookies' || location.hash === '#/cookies') showPage('cookies');
+    else histBody.classList.add('visible');
   } catch { showLogin(); }
   refreshCookieBadge();
 })();

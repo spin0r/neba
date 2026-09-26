@@ -427,7 +427,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(out)
             return
 
-        if path in ("/", "/index.html"):
+        if path in ("/", "/index.html", "/cookies"):
             if not _authed(self.headers):
                 pass  # frontend shows the login view itself
             index = STATIC_DIR / "index.html"
