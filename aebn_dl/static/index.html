@@ -317,9 +317,6 @@ body::after {
         <button class="page-pill active" data-page="extract">Extract</button>
         <button class="page-pill" data-page="cookies">Cookies</button>
       </div>
-      <button class="cookie-status" id="cookieBtn" title="Open cookies page">
-        <span class="dot" id="cookieDot"></span><span id="cookieLabel">Cookies</span>
-      </button>
     </div>
     <div class="input-row">
       <div class="input-wrap">
@@ -615,7 +612,6 @@ function storeCookies(cfg, value, quiet = false) {
   }
   if (value) localStorage.setItem(cfg.store, value);
   else localStorage.removeItem(cfg.store);
-  refreshCookieBadge();
   return true;
 }
 
@@ -673,7 +669,6 @@ function wireCookieBoxes(root, prefix) {
             if (el) { el.classList.add('ok'); el.textContent = 'Server session active.'; }
             const dot = root.querySelector(`#${prefix}-dot-${site}`);
             if (dot) dot.classList.add('ok');
-            refreshCookieBadge();
           } else toast(r.error || 'Save failed', true);
           return;
         }
@@ -681,7 +676,6 @@ function wireCookieBoxes(root, prefix) {
           localStorage.removeItem(cfg.store);
           await api(`/api/cookies?site=${site}`, { method: 'DELETE' }).catch(() => {});
           area.value = '';
-          refreshCookieBadge();
           toast(`${cfg.label} cookies cleared`);
           return;
         }
@@ -765,25 +759,6 @@ document.querySelectorAll('.page-pill').forEach(p => {
 window.addEventListener('hashchange', () => {
   showPage(location.hash === '#/cookies' ? 'cookies' : 'extract');
 });
-$('cookieBtn').onclick = () => showPage('cookies');
-
-async function refreshCookieBadge() {
-  const localAde = localStorage.getItem('ae_cookies_ade');
-  const localEa = localStorage.getItem('ae_cookies_ea');
-  const localLegacy = localStorage.getItem('ae_cookies');
-  let server = {};
-  try { server = await api('/api/cookies'); } catch {}
-  const ok = Boolean(
-    (localAde && localAde.includes('etoken')) ||
-    (localEa && localEa.includes('etoken')) ||
-    (localLegacy && localLegacy.includes('etoken')) ||
-    (server.ade && server.ade.configured) ||
-    (server.ea && server.ea.configured)
-  );
-  $('cookieDot').className = 'dot' + (ok ? ' ok' : '');
-  $('cookieLabel').textContent = ok ? 'Cookies ✓' : 'Cookies';
-}
-
 // ── Login ──
 function showLogin() {
   authed = false;
@@ -813,7 +788,6 @@ $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLog
     if (location.pathname === '/cookies' || location.hash === '#/cookies') showPage('cookies');
     else histBody.classList.add('visible');
   } catch { showLogin(); }
-  refreshCookieBadge();
 })();
 </script>
 </body>
