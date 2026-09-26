@@ -337,7 +337,7 @@ def _extract_ea_screenshots(html: str) -> list[dict[str, str]]:
             continue
         seen.add(key)
         shots.append({
-            "thumb": m.group(0),
+            "thumb": f"{host}/n/{gallery}/1280/{master}_{offset}_1280c.jpg",
             "full": f"{host}/n/{gallery}/3840/{master}_{offset}_3840.jpg",
         })
     return shots
@@ -378,7 +378,7 @@ def _synth_screenshots(item_detail: dict[str, Any], scene_id: str | int | None =
     while offset <= end and len(shots) < limit:
         tag = f"{offset:05d}"
         shots.append({
-            "thumb": f"https://caps1cdn.adultempire.com/n/{gallery}/320/{master}_{tag}_320c.jpg",
+            "thumb": f"https://caps1cdn.adultempire.com/n/{gallery}/1280/{master}_{tag}_1280c.jpg",
             "full": f"https://caps1cdn.adultempire.com/n/{gallery}/3840/{master}_{tag}_3840.jpg",
         })
         offset += step
