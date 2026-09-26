@@ -25,6 +25,8 @@ body {
   align-items: flex-start;
   justify-content: center;
   -webkit-font-smoothing: antialiased;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
 }
 body::before {
   content: ''; position: fixed; inset: 0;
@@ -60,6 +62,16 @@ body::after {
   backdrop-filter: blur(48px) saturate(1.8);
   -webkit-backdrop-filter: blur(48px) saturate(1.8);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 14vh - 20px);
+}
+.input-row, .mode-row { flex-shrink: 0; }
+.body.visible {
+  overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .brand-row {
   display: flex; align-items: center; justify-content: space-between;
