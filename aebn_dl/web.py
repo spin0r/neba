@@ -44,6 +44,14 @@ HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
 COOKIES_FILE = HERE / "ade_cookies.json"
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(dotenv_path=HERE / ".env", override=False)
+    load_dotenv(dotenv_path=HERE.parent / ".env", override=False)
+except ImportError:
+    pass
+
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "")
 DEFAULT_PROXY = os.getenv("AEBN_PROXY", "")
 DEFAULT_THREADS = int(os.getenv("AEBN_THREADS", "5"))
