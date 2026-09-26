@@ -155,16 +155,14 @@ function render(d: ExtractData): void {
   return renderManifest(d);
 }
 
-function qualityBadge(height: number): { label: string; cls: string } {
-  if (height >= 2160) return { label: '4K UHD', cls: 'uhd' };
-  if (height >= 1080) return { label: 'Full HD', cls: 'fhd' };
-  if (height >= 720) return { label: 'HD', cls: 'hd' };
-  return { label: 'SD', cls: 'sd' };
+function qualityLabel(height: number): string {
+  if (height >= 2160) return '4K UHD';
+  if (height >= 1080) return 'Full HD';
+  if (height >= 720) return 'HD';
+  return 'SD';
 }
 
-const VIDEO_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`;
-
-const PLAYLIST_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+const COPY_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 
 function renderManifest(d: ExtractData): void {
   const { site, t } = headerLabel(d);
@@ -180,19 +178,18 @@ function renderManifest(d: ExtractData): void {
     : `<div class="hero-value small">${esc(master.slice(0, 90))}…</div><div class="hero-sub">master playlist · click to copy</div>`;
 
   const rows = links
-    .map((l) => {
-      const q = qualityBadge(l.height);
-      const isHi = l.height >= 1080;
+    .map((l, i) => {
+      const q = qualityLabel(l.height);
+      const isBest = i === 0;
       return `
-    <div class="row" data-copy="${esc(l.url)}" title="Click to copy ${l.height}p link">
+    <div class="row ${isBest ? 'is-best' : ''}" data-copy="${esc(l.url)}" title="Click to copy ${l.height}p link">
       <div class="row-left">
-        <span class="row-icon ${isHi ? 'hi' : ''}">${VIDEO_ICON}</span>
         <span class="row-name">${l.height}p</span>
-        <span class="row-badge ${q.cls}">${q.label}</span>
-        <span class="row-mono">${esc(l.url)}</span>
+        <span class="row-quality">${q}</span>
       </div>
       <div class="row-right">
-        <span class="row-tag">Copy</span>
+        <span class="row-action-text">Copy</span>
+        <span class="row-copy-icon">${COPY_ICON}</span>
         <span class="kbd">↵</span>
       </div>
     </div>`;
@@ -218,13 +215,12 @@ function renderManifest(d: ExtractData): void {
         ? `<div class="section-label">Master playlist</div><div class="list">
       <div class="row" data-copy="${esc(master)}" title="Click to copy master URL">
         <div class="row-left">
-          <span class="row-icon master">${PLAYLIST_ICON}</span>
           <span class="row-name">Master</span>
-          <span class="row-badge hls">HLS</span>
-          <span class="row-mono">${esc(master)}</span>
+          <span class="row-quality">HLS</span>
         </div>
         <div class="row-right">
-          <span class="row-tag">Copy</span>
+          <span class="row-action-text">Copy</span>
+          <span class="row-copy-icon">${COPY_ICON}</span>
           <span class="kbd">↵</span>
         </div>
       </div></div>`
