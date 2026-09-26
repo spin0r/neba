@@ -12,6 +12,8 @@ and exposes:
 - ``GET  /api/cookies``      per-site session status (``ade`` + ``ea``)
 - ``POST /api/cookies``      ``{"site": "ade"|"ea", "cookies": "..."}`` save session
 - ``DELETE /api/cookies?site=ade|ea``  clear one (or both) saved session(s)
+- ``GET  /api/plainraw?site=ade``      pull site paste content from PlainRaw
+- ``POST /api/plainraw``     ``{"site": ..., "content": ...}`` push to PlainRaw
 
 Only the standard library is used so this works without the ``bot`` extra.
 Run standalone with ``aebndl-web`` (or ``python -m aebn_dl.web``).
@@ -27,6 +29,8 @@ import logging
 import os
 import re
 import secrets
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from html import unescape as html_unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -131,6 +135,65 @@ def _save_site_cookies(site: str, cookie_text: str) -> None:
         # (which reads key "0") keeps working with existing logic.
         data["0"] = cookie_text
     COOKIES_FILE.write_text(json.dumps(data, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# PlainRaw sync (https://api.plainraw.com/api) — one paste per site.
+# Configure with PLAINRAW_ADE_UUID / PLAINRAW_ADE_KEY
+# (and PLAINRAW_EA_UUID / PLAINRAW_EA_KEY for Elegant Angel).
+# ---------------------------------------------------------------------------
+PLAINRAW_API = "https://api.plainraw.com/api"
+PLAINRAW_MAX = 30000
+PLAINRAW_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
+
+def _plainraw_cfg(site: str) -> tuple[str, str]:
+    site = site.lower()
+    if site not in ("ade", "ea"):
+        return "", ""
+    return (
+        os.getenv(f"PLAINRAW_{site.upper()}_UUID", ""),
+        os.getenv(f"PLAINRAW_{site.upper()}_KEY", ""),
+    )
+
+
+def _plainraw_pull(site: str) -> dict[str, Any]:
+    uuid, key = _plainraw_cfg(site)
+    if not uuid or not key:
+        return {"configured": False}
+    try:
+        qs = urllib.parse.urlencode({"uuid": uuid, "editKey": key})
+        req = urllib.request.Request(f"{PLAINRAW_API}/snippet?{qs}", method="GET",
+                                     headers={"User-Agent": PLAINRAW_UA})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        return {
+            "configured": True,
+            "content": data.get("content", ""),
+            "updated_at": data.get("updatedAt", ""),
+        }
+    except Exception as e:
+        return {"configured": True, "error": str(e)}
+
+
+def _plainraw_push(site: str, content: str) -> dict[str, Any]:
+    uuid, key = _plainraw_cfg(site)
+    if not uuid or not key:
+        return {"success": False, "error": f"No PlainRaw paste configured for '{site}'"}
+    if len(content) > PLAINRAW_MAX:
+        return {"success": False, "error": f"Content too large for PlainRaw (max {PLAINRAW_MAX} chars)"}
+    try:
+        body = json.dumps({"uuid": uuid, "editKey": key, "content": content}).encode()
+        req = urllib.request.Request(
+            f"{PLAINRAW_API}/update", data=body,
+            headers={"Content-Type": "application/json", "User-Agent": PLAINRAW_UA},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode())
+        return {"success": True, "updated_at": data.get("updatedAt", "")}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def _format_duration(duration_s: int | None) -> str:
@@ -423,8 +486,20 @@ class Handler(BaseHTTPRequestHandler):
                             info["account"] = executor.submit(_account_info, saved).result(timeout=30)
                         except Exception as e:
                             info["account_error"] = str(e)
+                puuid, _ = _plainraw_cfg(site)
+                info["plainraw"] = bool(puuid)
                 out[site] = info
             self._send_json(out)
+            return
+
+        if path == "/api/plainraw":
+            if not self._require_auth():
+                return
+            qs = parse_qs(parsed.query or "")
+            sites = qs.get("site", [])
+            targets = [s for s in sites if s in ("ade", "ea")] or ["ade", "ea"]
+            futs = {s: executor.submit(_plainraw_pull, s) for s in targets}
+            self._send_json({s: f.result(timeout=30) for s, f in futs.items()})
             return
 
         if path in ("/", "/index.html", "/cookies"):
@@ -494,6 +569,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             _save_site_cookies(site, cookie_text)
             self._send_json({"success": True, "site": site, "expiry": _cookie_expiry(cookie_text)})
+            return
+
+        if path == "/api/plainraw":
+            body = self._read_json()
+            site = str(body.get("site", "") or "").lower()
+            content = str(body.get("content", "") or "")
+            if site not in ("ade", "ea"):
+                self._send_json({"success": False, "error": "Missing site — use 'ade' or 'ea'"}, 200)
+                return
+            if "etoken" not in content:
+                self._send_json({"success": False, "error": "No etoken found — refusing to push"}, 200)
+                return
+            result = executor.submit(_plainraw_push, site, content).result(timeout=30)
+            self._send_json(result)
             return
 
         self._send_json({"error": "not found"}, 404)

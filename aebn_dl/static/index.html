@@ -255,6 +255,10 @@ body::after {
 .page-pill.active { color: #fff; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.14); }
 .cookie-page { padding: 4px 4px 8px 4px; }
 .cookie-page .cookie-box { margin: 0 12px 12px 12px; }
+.pr-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.pr-status { font-size: 11px; color: var(--text-sub); font-family: var(--mono); }
+.pr-status.ok { color: var(--green); }
+.pr-status.err { color: #f87171; }
 .cookie-area {
   width: 100%; min-height: 130px; resize: vertical;
   background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.12);
@@ -594,6 +598,11 @@ function cookieBoxesHTML(prefix) {
         <button class="btn" data-act="server">Server</button>
         <button class="btn primary" data-act="save">Save</button>
       </div>
+      <div class="pr-row">
+        <button class="btn" data-act="pull">↓ PlainRaw</button>
+        <button class="btn" data-act="push">↑ PlainRaw</button>
+        <span class="pr-status" id="${prefix}-pr-${s.site}"></span>
+      </div>
       <input type="file" class="mFile" accept=".txt,.cookies" style="display:none" />
     </div>`).join('');
 }
@@ -608,6 +617,43 @@ function storeCookies(cfg, value, quiet = false) {
   return true;
 }
 
+function prStatus(prefix, site, msg, cls = '') {
+  const el = document.querySelector(`#${prefix}-pr-${site}`);
+  if (el) {
+    el.textContent = msg;
+    el.className = 'pr-status' + (cls ? ' ' + cls : '');
+  }
+}
+
+async function pushPlainRaw(prefix, site, content) {
+  const cfg = COOKIE_SITES.find(x => x.site === site);
+  prStatus(prefix, site, 'pushing…');
+  const r = await api('/api/plainraw', { method: 'POST', body: JSON.stringify({ site, content }) }).catch(() => null);
+  if (r && r.success) {
+    prStatus(prefix, site, 'PlainRaw updated', 'ok');
+    return true;
+  }
+  prStatus(prefix, site, (r && r.error) || 'push failed', 'err');
+  if (r && r.error && !r.error.includes('No PlainRaw paste configured')) toast(r.error, true);
+  return false;
+}
+
+async function pullPlainRaw(prefix, site) {
+  const cfg = COOKIE_SITES.find(x => x.site === site);
+  prStatus(prefix, site, 'pulling…');
+  const r = await api(`/api/plainraw?site=${site}`).catch(() => null);
+  const st = r && r[site];
+  if (!st || !st.configured) { prStatus(prefix, site, 'no PlainRaw paste configured', 'err'); return; }
+  if (st.error) { prStatus(prefix, site, st.error, 'err'); return; }
+  const content = (st.content || '').trim();
+  if (!content.includes('etoken')) { prStatus(prefix, site, 'paste has no cookies', 'err'); return; }
+  const area = document.querySelector(`#${prefix}-area-${site}`);
+  if (area) area.value = content;
+  storeCookies(cfg, content, true);
+  prStatus(prefix, site, 'loaded from PlainRaw', 'ok');
+  toast(`${cfg.label} loaded from PlainRaw`);
+}
+
 function wireCookieBoxes(root, prefix) {
   root.querySelectorAll('.cookie-box').forEach(box => {
     const site = box.dataset.site;
@@ -617,17 +663,21 @@ function wireCookieBoxes(root, prefix) {
     let debounce;
 
     // Auto-store: pasting cookies saves them in this browser immediately
+    // and pushes to PlainRaw (if configured for this site)
     area.addEventListener('paste', () => {
-      setTimeout(() => {
-        if (storeCookies(cfg, area.value.trim(), true))
-          toast(`${cfg.label} cookies stored — tap Server to persist`);
+      setTimeout(async () => {
+        const v = area.value.trim();
+        if (!storeCookies(cfg, v, true)) return;
+        toast(`${cfg.label} cookies stored — tap Server to persist`);
+        await pushPlainRaw(prefix, site, v);
       }, 50);
     });
     area.addEventListener('input', () => {
       clearTimeout(debounce);
-      debounce = setTimeout(() => {
+      debounce = setTimeout(async () => {
         const v = area.value.trim();
-        if (v && v.includes('etoken')) storeCookies(cfg, v, true);
+        if (v && v.includes('etoken') && storeCookies(cfg, v, true))
+          await pushPlainRaw(prefix, site, v);
       }, 1500);
     });
 
@@ -648,8 +698,11 @@ function wireCookieBoxes(root, prefix) {
           return;
         }
         if (act === 'save') {
-          if (storeCookies(cfg, area.value.trim()))
+          const v = area.value.trim();
+          if (storeCookies(cfg, v)) {
             toast(`${cfg.label} cookies saved in browser`);
+            await pushPlainRaw(prefix, site, v);
+          }
           return;
         }
         if (act === 'server') {
@@ -669,7 +722,16 @@ function wireCookieBoxes(root, prefix) {
           localStorage.removeItem(cfg.store);
           await api(`/api/cookies?site=${site}`, { method: 'DELETE' }).catch(() => {});
           area.value = '';
+          prStatus(prefix, site, '');
           toast(`${cfg.label} cookies cleared`);
+          return;
+        }
+        if (act === 'pull') { pullPlainRaw(prefix, site); return; }
+        if (act === 'push') {
+          const v = area.value.trim() || localStorage.getItem(cfg.store) || '';
+          if (!v) { toast('Nothing to push', true); return; }
+          if (!v.includes('etoken')) { toast('No etoken found', true); return; }
+          if (await pushPlainRaw(prefix, site, v)) toast(`${cfg.label} pushed to PlainRaw`);
           return;
         }
       };
@@ -680,10 +742,13 @@ function wireCookieBoxes(root, prefix) {
       const rd = new FileReader();
       rd.onload = () => {
         area.value = rd.result;
-        if (storeCookies(cfg, String(rd.result).trim(), true))
+        const v = String(rd.result).trim();
+        if (storeCookies(cfg, v, true)) {
           toast('File loaded & stored — tap Server to persist');
-        else
+          pushPlainRaw(prefix, site, v);
+        } else {
           toast('File loaded — review & save');
+        }
       };
       rd.readAsText(f);
     };
@@ -749,7 +814,11 @@ function importAllCookies(e) {
       if (obj && (typeof obj.ade === 'string' || typeof obj.ea === 'string')) {
         let n = 0;
         for (const s of COOKIE_SITES) {
-          if (obj[s.site] && String(obj[s.site]).includes('etoken')) { fillSiteBox(s.site, String(obj[s.site])); n++; }
+          if (obj[s.site] && String(obj[s.site]).includes('etoken')) {
+            fillSiteBox(s.site, String(obj[s.site]));
+            pushPlainRaw('pg', s.site, String(obj[s.site]));
+            n++;
+          }
         }
         toast(n ? `Imported ${n} site${n > 1 ? 's' : ''} — tap Server to persist` : 'No valid cookies in file', !n);
         return;
@@ -772,6 +841,7 @@ function importAllCookies(e) {
       const combined = [...header, ...buckets[s.site]].join('\n');
       if (!combined.includes('etoken')) continue;
       fillSiteBox(s.site, combined);
+      pushPlainRaw('pg', s.site, combined);
       n++;
     }
     toast(n ? `Imported ${n} site${n > 1 ? 's' : ''} — tap Server to persist` : 'No valid cookies in file', !n);

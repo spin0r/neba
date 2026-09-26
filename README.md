@@ -125,6 +125,23 @@ WEB_PASSWORD=secret aebndl-web # optional password lock, else open
 API (same-origin JSON): `POST /api/extract {url, mode, cookies}`,
 `GET/POST/DELETE /api/cookies`, `GET /api/auth-check`, `POST /api/login`.
 
+### PlainRaw cookie sync
+
+Each site box on the `/cookies` page syncs two-way with a
+[PlainRaw](https://www.plainraw.com) paste (same host the bot already reads
+via `ADE_COOKIES_URL`):
+
+```
+PLAINRAW_ADE_UUID=b36c9c54ef02   # paste id from your edit link
+PLAINRAW_ADE_KEY=830c23ac3...    # edit key (secret — never commit)
+# PLAINRAW_EA_UUID= / PLAINRAW_EA_KEY=  (second paste for Elegant Angel)
+```
+
+- **Pull (`↓ PlainRaw`)**: loads the paste into the box and stores it.
+- **Push (`↑ PlainRaw`)**: writes the box to the paste.
+- **Auto-push**: pasting, importing, or saving cookies pushes automatically
+  when a paste is configured for that site.
+
 Inline buttons: `📄 Get m3u8 / DASH URL` (primary), per-resolution shortcuts, `Refresh m3u8`, `Show info`.
 
 Manifest is fetched via `POST https://{type}.aebn.com/{type}/deliver` (`movieId`, `format=DASH`) → `content["url"]` (`aebn_dl/manifest_parser.py:92`), same as `Manifest._get_new_manifest_url()`. The bot runs `_blocking_m3u8()` in `ThreadPoolExecutor` and returns `manifest_url` + `base_stream_url` as code-block for easy copy.
