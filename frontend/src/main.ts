@@ -14,6 +14,7 @@ import {
   moveSelection,
   activateSelection,
   resetSelection,
+  cycleMode,
 } from './extract';
 import { renderCookiesPage } from './cookies';
 
@@ -58,6 +59,10 @@ document.addEventListener('keydown', (e) => {
     if (!resultsVisible() || page !== 'extract') return;
     e.preventDefault();
     moveSelection(e.key === 'ArrowDown' ? 1 : -1);
+  } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    if (page !== 'extract') return;
+    e.preventDefault();
+    cycleMode(e.key === 'ArrowRight' ? 1 : -1);
   } else if (e.key === 'Enter') {
     if (tag === 'INPUT' && (e.target as HTMLInputElement).id === 'urlInput') {
       // Enter in the URL bar: copy selection if navigating, else fetch

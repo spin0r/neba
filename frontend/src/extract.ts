@@ -327,6 +327,13 @@ export function setMode(next: Mode): void {
   if (lastData) render(lastData);
 }
 
+const MODES: Mode[] = ['manifest', 'info', 'covers', 'screenshots'];
+
+export function cycleMode(dir: 1 | -1): void {
+  const i = MODES.indexOf(mode);
+  setMode(MODES[(i + dir + MODES.length) % MODES.length]);
+}
+
 export function initExtractPage(): void {
   document.querySelectorAll('.mode-pill').forEach((p) => {
     ((p as HTMLElement).onclick = () => setMode(((p as HTMLElement).dataset.mode as Mode) || 'manifest'));
