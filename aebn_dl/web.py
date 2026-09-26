@@ -1,7 +1,7 @@
 """Standalone web server + JSON API mirroring the Telegram bot actions.
 
-Serves a single-file Calcast-style frontend (``aebn_dl/static/index.html``)
-and exposes:
+Serves the Vite + TypeScript frontend (``frontend/dist``, built with
+``npm run build``) and exposes:
 
 - ``GET  /``                 frontend
 - ``GET  /health``           health check (``OK``)
@@ -41,7 +41,6 @@ from urllib.parse import parse_qs, urlparse
 logger = logging.getLogger(__name__)
 
 HERE = Path(__file__).resolve().parent
-STATIC_DIR = HERE / "static"
 COOKIES_FILE = HERE / "ade_cookies.json"
 FRONTEND_DIST = HERE.parent / "frontend" / "dist"
 
@@ -58,10 +57,7 @@ _ASSET_TYPES = {
 
 def _frontend_index() -> Path | None:
     dist_index = FRONTEND_DIST / "index.html"
-    if dist_index.exists():
-        return dist_index
-    static_index = STATIC_DIR / "index.html"
-    return static_index if static_index.exists() else None
+    return dist_index if dist_index.exists() else None
 
 try:
     from dotenv import load_dotenv
@@ -536,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
             if index is not None:
                 self._send_file(index, "text/html; charset=utf-8")
             else:
-                self._send_json({"error": "frontend not built"}, 500)
+                self._send_json({"error": "frontend not built — run `npm run build` in frontend/"}, 500)
             return
 
         if path.startswith("/assets/"):
