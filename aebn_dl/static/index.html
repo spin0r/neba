@@ -854,6 +854,25 @@ let page = 'extract';
 const cookiesPage = $('cookiesPage');
 let cookiesPageBuilt = false;
 
+// Auto-load: on opening the page, fill any empty box from its PlainRaw
+// paste (never overwrites cookies already stored in this browser).
+async function autoPullPlainRaw() {
+  let status = {};
+  try { status = await api('/api/plainraw'); } catch { return; }
+  for (const s of COOKIE_SITES) {
+    const area = cookiesPage.querySelector(`#pg-area-${s.site}`);
+    const hasLocal = (area && area.value.trim()) || localStorage.getItem(s.store);
+    if (hasLocal) continue;
+    const st = status[s.site] || {};
+    if (!st.configured || st.error) continue;
+    const content = (st.content || '').trim();
+    if (!content.includes('etoken')) continue;
+    if (area) area.value = content;
+    storeCookies(s, content, true);
+    prStatus('pg', s.site, 'auto-loaded from PlainRaw', 'ok');
+  }
+}
+
 function showPage(next) {
   page = next;
   document.querySelectorAll('.page-pill').forEach(p => p.classList.toggle('active', p.dataset.page === next));
@@ -888,6 +907,7 @@ function showPage(next) {
       }
     }
     refreshServerStatus(cookiesPage, 'pg');
+    autoPullPlainRaw();
     if (location.hash !== '#/cookies') history.replaceState(null, '', '#/cookies');
   } else if (!onCookies && location.hash === '#/cookies') {
     history.replaceState(null, '', location.pathname);
