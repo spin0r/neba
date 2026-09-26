@@ -246,20 +246,77 @@ body::after {
 }
 .row-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; overflow: hidden; }
 .row-icon {
-  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
-  border-radius: 6px; background: rgba(255,255,255,0.08);
-  font-size: 11px; font-weight: 700; color: var(--text-white); flex-shrink: 0;
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted); flex-shrink: 0;
+  transition: all .15s ease;
 }
-.row-icon.hi { color: var(--green); }
-.row-name { font-size: 13.5px; font-weight: 500; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; max-width: 40vw; }
-.row-mono { font-size: 11px; color: var(--text-sub); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; max-width: 46ch; }
-.row-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.row-tag { font-size: 11px; color: var(--text-sub); }
+.row-icon svg { display: block; flex-shrink: 0; }
+.row-icon.hi {
+  color: var(--green);
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.24);
+}
+.row-icon.master {
+  color: var(--accent);
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.24);
+}
+.row-name {
+  font-size: 13.5px; font-weight: 600; color: var(--text-white);
+  white-space: nowrap; flex-shrink: 0; letter-spacing: -0.01em;
+}
+.row-badge {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 2px 7px; border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text-muted); white-space: nowrap; flex-shrink: 0; line-height: 1.35;
+}
+.row-badge.uhd {
+  background: rgba(167, 139, 250, 0.12);
+  border-color: rgba(167, 139, 250, 0.25);
+  color: #c4b5fd;
+}
+.row-badge.fhd {
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.25);
+  color: var(--green);
+}
+.row-badge.hd {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.25);
+  color: var(--accent);
+}
+.row-badge.sd {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-sub);
+}
+.row-badge.hls {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.25);
+  color: #fcd34d;
+}
+.row-mono {
+  font-size: 11px; color: var(--text-sub); font-family: var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; flex: 1 1 0;
+}
+.row-right { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.row-tag { font-size: 11.5px; font-weight: 500; color: var(--text-sub); transition: color .12s ease; }
+.row:hover .row-tag, .row.selected .row-tag { color: var(--text-white); }
+.row:hover .kbd, .row.selected .kbd {
+  border-color: rgba(255, 255, 255, 0.24);
+  color: var(--text-white);
+  background: rgba(255, 255, 255, 0.12);
+}
 .kbd {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 5px; border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.06);
   font-size: 11px; font-weight: 600; color: var(--text-muted);
+  transition: all .12s ease;
 }
 .kv { padding: 0 20px 6px 20px; }
 .kv-row {
