@@ -17,6 +17,7 @@ import {
   cycleMode,
 } from './extract';
 import { renderCookiesPage } from './cookies';
+import { isViewerOpen, step as viewerStep, closeViewer, copyCurrent } from './viewer';
 
 type Page = 'extract' | 'cookies';
 
@@ -54,6 +55,17 @@ document.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (document.querySelector('.modal-overlay')) return;
+
+  // Viewer takes over all keys while open
+  if (isViewerOpen()) {
+    if (e.key === 'ArrowRight') viewerStep(1);
+    else if (e.key === 'ArrowLeft') viewerStep(-1);
+    else if (e.key === 'Escape') closeViewer();
+    else if (e.key === 'Enter') copyCurrent();
+    else return;
+    e.preventDefault();
+    return;
+  }
 
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     if (!resultsVisible() || page !== 'extract') return;

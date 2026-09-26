@@ -3,6 +3,7 @@
 import { api, AuthError } from './api';
 import type { ExtractData } from './api';
 import { $, esc, copyText, fmtRes } from './ui';
+import { openViewer } from './viewer';
 
 export type Mode = 'manifest' | 'info' | 'covers' | 'screenshots';
 
@@ -280,7 +281,11 @@ function renderCovers(d: ExtractData): void {
         .join('')}
     </div>`;
   resultBody.querySelectorAll('img[data-i]').forEach((img) => {
-    (img as HTMLElement).onclick = () => window.open(covers[Number((img as HTMLElement).dataset.i)], '_blank');
+    (img as HTMLElement).onclick = () =>
+      openViewer(
+        covers.map((c) => ({ thumb: c, full: c })),
+        Number((img as HTMLElement).dataset.i),
+      );
   });
   resultBody.querySelectorAll('button[data-copy]').forEach((b) => {
     (b as HTMLElement).onclick = () => void copyText((b as HTMLElement).dataset.copy || '', 'Copied cover URL');
@@ -310,8 +315,8 @@ function renderScreenshots(d: ExtractData): void {
     </div>`
         : ''
     }`;
-  resultBody.querySelectorAll('.shots img').forEach((img) => {
-    (img as HTMLElement).onclick = () => window.open((img as HTMLElement).dataset.full || '', '_blank');
+  resultBody.querySelectorAll('.shots img').forEach((img, i) => {
+    (img as HTMLElement).onclick = () => openViewer(shots, i);
   });
   const btn = document.getElementById('btnCopyShots');
   if (btn)

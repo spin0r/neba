@@ -194,6 +194,53 @@ body::after {
 .action-pill-btn.selected { border-color: rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.13); }
 .hero-card.selected { border-color: rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.085); }
 .shots img.selected, .covers img.selected { border-color: rgba(255, 255, 255, 0.35); }
+
+/* ── Fullscreen viewer ── */
+.viewer-overlay {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(5, 5, 8, 0.94);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: flex; align-items: center; justify-content: center;
+  animation: viewerIn 0.18s ease;
+}
+@keyframes viewerIn { from { opacity: 0; } to { opacity: 1; } }
+.viewer-top {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; z-index: 2;
+}
+.viewer-count { font-size: 12.5px; font-weight: 600; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.viewer-actions { display: flex; gap: 8px; }
+.viewer-btn {
+  font-size: 12.5px; font-weight: 500; color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px; padding: 5px 12px; cursor: pointer; font-family: var(--font);
+  transition: all 0.15s ease;
+}
+.viewer-btn:hover { background: rgba(255, 255, 255, 0.15); color: #fff; }
+.viewer-stage { max-width: 92vw; max-height: 88vh; display: flex; align-items: center; justify-content: center; }
+.viewer-stage img {
+  max-width: 92vw; max-height: 88vh; object-fit: contain;
+  border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.viewer-stage img.loading { opacity: 0.25; }
+.viewer-arrow {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 44px; height: 64px; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff; font-size: 26px; line-height: 1; cursor: pointer; z-index: 2;
+  transition: background 0.15s ease;
+}
+.viewer-arrow:hover { background: rgba(255, 255, 255, 0.16); }
+.viewer-arrow.prev { left: 14px; }
+.viewer-arrow.next { right: 14px; }
+@media (max-width: 640px) {
+  .viewer-arrow { width: 36px; height: 52px; }
+  .viewer-arrow.prev { left: 6px; }
+  .viewer-arrow.next { right: 6px; }
+}
 .row-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; overflow: hidden; }
 .row-icon {
   width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
