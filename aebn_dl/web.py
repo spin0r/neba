@@ -449,11 +449,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, path: Path, ctype: str):
+    def _send_file(self, path: Path, ctype: str, cache: str = "no-store"):
         body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(body)
 
@@ -539,7 +540,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/assets/"):
             asset = (FRONTEND_DIST / path.lstrip("/")).resolve()
             if FRONTEND_DIST.resolve() in asset.parents and asset.is_file():
-                self._send_file(asset, _ASSET_TYPES.get(asset.suffix.lower(), "application/octet-stream"))
+                # Hashed filenames are content-addressed → cache forever
+                self._send_file(asset, _ASSET_TYPES.get(asset.suffix.lower(), "application/octet-stream"),
+                                cache="public, max-age=31536000, immutable")
             else:
                 self._send_json({"error": "not found"}, 404)
             return
