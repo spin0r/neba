@@ -251,8 +251,8 @@ body::after {
   font-size: 11px; font-weight: 700; color: var(--text-white); flex-shrink: 0;
 }
 .row-icon.hi { color: var(--green); }
-.row-name { font-size: 13.5px; font-weight: 500; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-.row-mono { font-size: 11px; color: var(--text-sub); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.row-name { font-size: 13.5px; font-weight: 500; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; max-width: 40vw; }
+.row-mono { font-size: 11px; color: var(--text-sub); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; max-width: 46ch; }
 .row-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .row-tag { font-size: 11px; color: var(--text-sub); }
 .kbd {
