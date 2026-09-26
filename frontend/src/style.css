@@ -187,22 +187,22 @@ body::after {
 .row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: background .12s ease;
-  gap: 10px;
+  gap: 10px; min-width: 0; overflow: hidden;
 }
 .row:hover { background: var(--item-selected); }
 .row.selected { background: var(--item-selected); outline: 1px solid rgba(255, 255, 255, 0.16); }
 .action-pill-btn.selected { border-color: rgba(255, 255, 255, 0.3); background: rgba(255, 255, 255, 0.13); }
 .hero-card.selected { border-color: rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.085); }
 .shots img.selected, .covers img.selected { border-color: rgba(255, 255, 255, 0.35); }
-.row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.row-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; overflow: hidden; }
 .row-icon {
   width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
   border-radius: 6px; background: rgba(255,255,255,0.08);
   font-size: 11px; font-weight: 700; color: var(--text-white); flex-shrink: 0;
 }
 .row-icon.hi { color: var(--green); }
-.row-name { font-size: 13.5px; font-weight: 500; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-mono { font-size: 11px; color: var(--text-sub); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.row-name { font-size: 13.5px; font-weight: 500; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+.row-mono { font-size: 11px; color: var(--text-sub); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
 .row-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .row-tag { font-size: 11px; color: var(--text-sub); }
 .kbd {
@@ -340,5 +340,5 @@ body::after {
   .hero-divider { width: auto; height: 1px; margin: 0 14px; }
   .hero-arrow { transform: translate(-50%,-50%) rotate(90deg); }
   .covers { grid-template-columns: 1fr; }
-  .row-mono { max-width: 180px; }
+  .row-mono { display: none; }
 }
