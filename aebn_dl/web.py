@@ -9,9 +9,9 @@ and exposes:
 - ``POST /api/login``        ``{"password": ...}`` -> auth cookie (only if WEB_PASSWORD set)
 - ``POST /api/logout``       clear auth cookie
 - ``POST /api/extract``      ``{"url": ..., "mode": "manifest"|"info", "cookies": "..."}``
-- ``GET  /api/cookies``      saved-cookie status (presence + expiry + account)
-- ``POST /api/cookies``      ``{"cookies": "..."}`` save global session
-- ``DELETE /api/cookies``    clear saved session
+- ``GET  /api/cookies``      per-site session status (``ade`` + ``ea``)
+- ``POST /api/cookies``      ``{"site": "ade"|"ea", "cookies": "..."}`` save session
+- ``DELETE /api/cookies?site=ade|ea``  clear one (or both) saved session(s)
 
 Only the standard library is used so this works without the ``bot`` extra.
 Run standalone with ``aebndl-web`` (or ``python -m aebn_dl.web``).
@@ -32,7 +32,7 @@ from html import unescape as html_unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -101,20 +101,35 @@ def _cookie_expiry(cookie_text: str) -> dict[str, Any] | None:
     }
 
 
-def _load_saved_cookies() -> str:
+def _load_all_cookies() -> dict:
     try:
         data = json.loads(COOKIES_FILE.read_text())
-        return data.get("0", "")
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return ""
+        return {}
 
 
-def _save_global_cookies(cookie_text: str) -> None:
-    try:
-        data = json.loads(COOKIES_FILE.read_text()) if COOKIES_FILE.exists() else {}
-    except Exception:
-        data = {}
-    data["0"] = cookie_text
+def _load_saved_cookies() -> str:
+    """Legacy global session (key "0", shared with the Telegram bot)."""
+    return _load_all_cookies().get("0", "")
+
+
+def _load_site_cookies(site: str) -> str:
+    """Site session. "ade" falls back to the legacy global key ("0", shared
+    with the Telegram bot); "ea" is strictly separate."""
+    data = _load_all_cookies()
+    if site == "ade":
+        return data.get("ade", "") or data.get("0", "")
+    return data.get("ea", "")
+
+
+def _save_site_cookies(site: str, cookie_text: str) -> None:
+    data = _load_all_cookies()
+    data[site] = cookie_text
+    if site == "ade":
+        # Mirror ADE cookies to the legacy global key so the Telegram bot
+        # (which reads key "0") keeps working with existing logic.
+        data["0"] = cookie_text
     COOKIES_FILE.write_text(json.dumps(data, indent=2))
 
 
@@ -278,7 +293,7 @@ def _info_aebn(url: str) -> dict[str, Any]:
     return data
 
 
-def do_extract(url: str, mode: str, cookies: str) -> dict[str, Any]:
+def do_extract(url: str, mode: str, cookies_ade: str = "", cookies_ea: str = "", cookies_legacy: str = "") -> dict[str, Any]:
     from .ade_scraper import ADE_URL_RE
 
     url = (url or "").strip()
@@ -288,9 +303,12 @@ def do_extract(url: str, mode: str, cookies: str) -> dict[str, Any]:
     if m:
         url = m.group(0).rstrip(")")
     host = urlparse(url).netloc.lower()
+    site = "ea" if "elegantangel.com" in host else "ade"
 
-    effective_cookies = (cookies or "").strip() or _load_saved_cookies() or os.getenv("ADE_COOKIES", "")
-    cookies_source = "request" if (cookies or "").strip() else ("server" if effective_cookies else "none")
+    req_cookies = ((cookies_ea or "") if site == "ea" else (cookies_ade or "")) or (cookies_legacy or "")
+    req_cookies = req_cookies.strip()
+    effective_cookies = req_cookies or _load_site_cookies(site) or os.getenv("ADE_COOKIES", "")
+    cookies_source = f"browser:{site}" if req_cookies else (f"server:{site}" if effective_cookies else "none")
 
     if ADE_URL_RE.search(url):
         data = _extract_ade(url, effective_cookies)
@@ -299,6 +317,7 @@ def do_extract(url: str, mode: str, cookies: str) -> dict[str, Any]:
     else:
         raise ValueError("Unsupported URL — paste an AEBN, AdultDVDEmpire or Elegant Angel link")
     data["cookies_source"] = cookies_source
+    data["cookie_site"] = site
     data["source_url"] = url
     return data
 
@@ -393,15 +412,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cookies":
             if not self._require_auth():
                 return
-            saved = _load_saved_cookies()
-            info: dict[str, Any] = {"configured": bool(saved and "etoken" in saved)}
-            if info["configured"]:
-                info["expiry"] = _cookie_expiry(saved)
-                try:
-                    info["account"] = executor.submit(_account_info, saved).result(timeout=30)
-                except Exception as e:
-                    info["account_error"] = str(e)
-            self._send_json(info)
+            out: dict[str, Any] = {}
+            for site in ("ade", "ea"):
+                saved = _load_site_cookies(site)
+                info: dict[str, Any] = {"configured": bool(saved and "etoken" in saved)}
+                if info["configured"]:
+                    info["expiry"] = _cookie_expiry(saved)
+                    if site == "ade":
+                        try:
+                            info["account"] = executor.submit(_account_info, saved).result(timeout=30)
+                        except Exception as e:
+                            info["account_error"] = str(e)
+                out[site] = info
+            self._send_json(out)
             return
 
         if path in ("/", "/index.html"):
@@ -449,6 +472,8 @@ class Handler(BaseHTTPRequestHandler):
                     do_extract,
                     str(body.get("url", "")),
                     str(body.get("mode", "manifest")),
+                    str(body.get("cookies_ade", "") or ""),
+                    str(body.get("cookies_ea", "") or ""),
                     str(body.get("cookies", "") or ""),
                 ).result(timeout=600)
                 self._send_json({"success": True, "data": data})
@@ -459,23 +484,35 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/cookies":
             body = self._read_json()
+            site = str(body.get("site", "") or "").lower()
+            if site not in ("ade", "ea"):
+                self._send_json({"success": False, "error": "Missing site — use 'ade' or 'ea'"}, 200)
+                return
             cookie_text = str(body.get("cookies", "") or "")
             if "etoken" not in cookie_text:
                 self._send_json({"success": False, "error": "No etoken found — paste the full Netscape cookie export"}, 200)
                 return
-            _save_global_cookies(cookie_text)
-            self._send_json({"success": True, "expiry": _cookie_expiry(cookie_text)})
+            _save_site_cookies(site, cookie_text)
+            self._send_json({"success": True, "site": site, "expiry": _cookie_expiry(cookie_text)})
             return
 
         self._send_json({"error": "not found"}, 404)
 
     # -- DELETE ------------------------------------------------------------
     def do_DELETE(self):
-        if urlparse(self.path).path == "/api/cookies":
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/cookies":
             if not self._require_auth():
                 return
-            _save_global_cookies("")
-            self._send_json({"success": True})
+            qs = parse_qs(parsed.query or "")
+            site = (qs.get("site", [""])[0] or "").lower()
+            if site not in ("ade", "ea", "", "both"):
+                self._send_json({"error": "site must be 'ade' or 'ea'"}, 400)
+                return
+            targets = ("ade", "ea") if site in ("", "both") else (site,)
+            for t in targets:
+                _save_site_cookies(t, "")
+            self._send_json({"success": True, "cleared": list(targets)})
             return
         self._send_json({"error": "not found"}, 404)
 

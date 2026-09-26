@@ -231,6 +231,19 @@ body::after {
 .modal-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .modal-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.55; }
 .modal-sub code { font-family: var(--mono); font-size: 11px; color: #e2e8f0; }
+.cookie-box {
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: rgba(0,0,0,0.2);
+}
+.cookie-box-title {
+  font-size: 12.5px; font-weight: 600; color: var(--text-white);
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.cookie-box-title .dot { width: 7px; height: 7px; }
+.cookie-box-sub { font-size: 11px; color: var(--text-sub); margin-bottom: 8px; font-family: var(--mono); }
 .cookie-area {
   width: 100%; min-height: 130px; resize: vertical;
   background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.12);
@@ -422,10 +435,12 @@ async function fetchExtract() {
   resultBody.classList.add('visible');
   resultBody.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching manifest…</div>';
   try {
-    const cookies = localStorage.getItem('ae_cookies') || '';
+    const cookies_ade = localStorage.getItem('ae_cookies_ade') || '';
+    const cookies_ea = localStorage.getItem('ae_cookies_ea') || '';
+    const cookies = localStorage.getItem('ae_cookies') || ''; // legacy single-box
     const r = await api('/api/extract', {
       method: 'POST',
-      body: JSON.stringify({ url, mode, cookies }),
+      body: JSON.stringify({ url, mode, cookies_ade, cookies_ea, cookies }),
     });
     if (!r.success) throw new Error(r.error || 'Extraction failed');
     lastData = r.data;
@@ -553,27 +568,36 @@ function renderCovers(d) {
   });
 }
 
-// ── Cookies modal ──
+// ── Cookies modal (separate boxes per site) ──
+const COOKIE_SITES = [
+  { site: 'ade', label: 'AdultDVDEmpire', host: 'adultdvdempire.com', store: 'ae_cookies_ade', file: 'adecookies.txt' },
+  { site: 'ea', label: 'Elegant Angel', host: 'elegantangel.com', store: 'ae_cookies_ea', file: 'eacookies.txt' },
+];
+
 function openCookies() {
-  const saved = localStorage.getItem('ae_cookies') || '';
   const ov = document.createElement('div');
   ov.className = 'modal-overlay';
   ov.innerHTML = `
     <div class="modal">
       <div class="modal-header"><span class="modal-title">Session cookies</span><button class="modal-close" id="mClose">×</button></div>
-      <div class="modal-sub">Export with the <b>Cookie-Editor</b> browser extension in <b>Netscape format</b> from
-        <code>adultdvdempire.com</code> or <code>elegantangel.com</code>, then paste below.
-        Stored in this browser (<code>localStorage</code>) and sent with each request; <b>Save to server</b> also persists it for the bot/API fallback.</div>
-      <textarea class="cookie-area" id="mArea" placeholder="# Netscape HTTP Cookie File&#10;...paste here...">${esc(saved)}</textarea>
-      <div class="cookie-status-line" id="mStatus">Checking server session…</div>
-      <div class="modal-actions">
-        <button class="btn" id="mImport">Import file</button>
-        <button class="btn" id="mExport">Export</button>
-        <button class="btn danger" id="mClear">Clear</button>
-        <button class="btn" id="mServer">Save to server</button>
-        <button class="btn primary" id="mSave">Save in browser</button>
-      </div>
-      <input type="file" id="mFile" accept=".txt,.cookies" style="display:none" />
+      <div class="modal-sub">Export with the <b>Cookie-Editor</b> browser extension in <b>Netscape format</b>
+        from each site, then paste into its box. Browser saves stay in <code>localStorage</code>;
+        <b>Server</b> saves persist on the server (ADE also feeds the Telegram bot).</div>
+      ${COOKIE_SITES.map(s => `
+      <div class="cookie-box" data-site="${s.site}">
+        <div class="cookie-box-title"><span class="dot" id="dot-${s.site}"></span>${s.label}</div>
+        <div class="cookie-box-sub">${s.host} → Netscape export</div>
+        <textarea class="cookie-area" id="area-${s.site}" placeholder="# Netscape HTTP Cookie File&#10;...paste ${s.host} cookies...">${esc(localStorage.getItem(s.store) || '')}</textarea>
+        <div class="cookie-status-line" id="status-${s.site}">Checking server session…</div>
+        <div class="modal-actions">
+          <button class="btn" data-act="import">Import file</button>
+          <button class="btn" data-act="export">Export</button>
+          <button class="btn danger" data-act="clear">Clear</button>
+          <button class="btn" data-act="server">Server</button>
+          <button class="btn primary" data-act="save">Save</button>
+        </div>
+        <input type="file" class="mFile" accept=".txt,.cookies" style="display:none" />
+      </div>`).join('')}
     </div>`;
   document.body.appendChild(ov);
   const close = () => ov.remove();
@@ -581,63 +605,102 @@ function openCookies() {
   ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
 
   api('/api/cookies').then(r => {
-    const el = $('mStatus');
-    if (!r.configured) { el.textContent = 'No server session saved.'; return; }
-    el.classList.add('ok');
-    const exp = r.expiry ? `expiry ${r.expiry.date}${r.expiry.expired ? ' (EXPIRED)' : ''}` : 'no expiry parsed';
-    const acc = r.account ? ` · ${r.account.email} · ${r.account.total_ppm} min` : (r.account_error ? ' · account lookup failed' : '');
-    el.textContent = `Server session active — ${exp}${acc}`;
-  }).catch(() => { $('mStatus').textContent = 'Could not reach server.'; });
+    for (const s of COOKIE_SITES) {
+      const st = (r && r[s.site]) || {};
+      const dot = $(`dot-${s.site}`);
+      const el = $(`status-${s.site}`);
+      if (!dot || !el) continue;
+      if (!st.configured) { el.textContent = 'No server session saved.'; continue; }
+      dot.classList.add('ok');
+      el.classList.add('ok');
+      const exp = st.expiry ? `expiry ${st.expiry.date}${st.expiry.expired ? ' (EXPIRED)' : ''}` : 'no expiry parsed';
+      const acc = st.account ? ` · ${st.account.email} · ${st.account.total_ppm} min` : (st.account_error ? ' · account lookup failed' : '');
+      el.textContent = `Server session active — ${exp}${acc}`;
+    }
+  }).catch(() => {
+    for (const s of COOKIE_SITES) {
+      const el = $(`status-${s.site}`);
+      if (el) el.textContent = 'Could not reach server.';
+    }
+  });
 
-  $('mSave').onclick = () => {
-    const v = $('mArea').value;
-    if (v && !v.includes('etoken')) { toast('No etoken found in pasted cookies', true); return; }
-    if (v) localStorage.setItem('ae_cookies', v); else localStorage.removeItem('ae_cookies');
-    refreshCookieBadge();
-    toast('Cookies saved in browser');
-    close();
-  };
-  $('mServer').onclick = async () => {
-    const v = $('mArea').value.trim();
-    if (!v) { toast('Paste cookies first', true); return; }
-    const r = await api('/api/cookies', { method: 'POST', body: JSON.stringify({ cookies: v }) });
-    if (r.success) { toast('Server session saved'); $('mStatus').textContent = 'Server session active.'; }
-    else toast(r.error || 'Save failed', true);
-  };
-  $('mClear').onclick = async () => {
-    localStorage.removeItem('ae_cookies');
-    await api('/api/cookies', { method: 'DELETE' }).catch(() => {});
-    refreshCookieBadge();
-    toast('Cookies cleared');
-    close();
-  };
-  $('mImport').onclick = () => $('mFile').click();
-  $('mFile').onchange = (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    const rd = new FileReader();
-    rd.onload = () => { $('mArea').value = rd.result; toast('File loaded — review & save'); };
-    rd.readAsText(f);
-  };
-  $('mExport').onclick = () => {
-    const v = $('mArea').value || localStorage.getItem('ae_cookies') || '';
-    if (!v) { toast('Nothing to export', true); return; }
-    const blob = new Blob([v], { type: 'text/plain' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'adecookies.txt';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    toast('Exported adecookies.txt');
-  };
+  ov.querySelectorAll('.cookie-box').forEach(box => {
+    const site = box.dataset.site;
+    const cfg = COOKIE_SITES.find(x => x.site === site);
+    const area = box.querySelector('textarea');
+    const fileInput = box.querySelector('.mFile');
+    box.querySelectorAll('[data-act]').forEach(btn => {
+      btn.onclick = async () => {
+        const act = btn.dataset.act;
+        if (act === 'import') { fileInput.click(); return; }
+        if (act === 'export') {
+          const v = area.value || localStorage.getItem(cfg.store) || '';
+          if (!v) { toast('Nothing to export', true); return; }
+          const blob = new Blob([v], { type: 'text/plain' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = cfg.file;
+          a.click();
+          URL.revokeObjectURL(a.href);
+          toast(`Exported ${cfg.file}`);
+          return;
+        }
+        if (act === 'save') {
+          const v = area.value;
+          if (v && !v.includes('etoken')) { toast('No etoken found in pasted cookies', true); return; }
+          if (v) localStorage.setItem(cfg.store, v); else localStorage.removeItem(cfg.store);
+          refreshCookieBadge();
+          toast(`${cfg.label} cookies saved in browser`);
+          return;
+        }
+        if (act === 'server') {
+          const v = area.value.trim();
+          if (!v) { toast('Paste cookies first', true); return; }
+          const r = await api('/api/cookies', { method: 'POST', body: JSON.stringify({ site, cookies: v }) });
+          if (r.success) {
+            toast(`${cfg.label} server session saved`);
+            const el = $(`status-${site}`);
+            if (el) { el.classList.add('ok'); el.textContent = 'Server session active.'; }
+            const dot = $(`dot-${site}`);
+            if (dot) dot.classList.add('ok');
+            refreshCookieBadge();
+          } else toast(r.error || 'Save failed', true);
+          return;
+        }
+        if (act === 'clear') {
+          localStorage.removeItem(cfg.store);
+          await api(`/api/cookies?site=${site}`, { method: 'DELETE' }).catch(() => {});
+          area.value = '';
+          refreshCookieBadge();
+          toast(`${cfg.label} cookies cleared`);
+          return;
+        }
+      };
+    });
+    fileInput.onchange = (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => { area.value = rd.result; toast('File loaded — review & save'); };
+      rd.readAsText(f);
+    };
+  });
 }
 $('cookieBtn').onclick = openCookies;
 
 async function refreshCookieBadge() {
-  const local = localStorage.getItem('ae_cookies');
-  let server = false;
-  try { server = (await api('/api/cookies')).configured; } catch {}
-  const ok = Boolean((local && local.includes('etoken')) || server);
+  const localAde = localStorage.getItem('ae_cookies_ade');
+  const localEa = localStorage.getItem('ae_cookies_ea');
+  const localLegacy = localStorage.getItem('ae_cookies');
+  let server = {};
+  try { server = await api('/api/cookies'); } catch {}
+  const ok = Boolean(
+    (localAde && localAde.includes('etoken')) ||
+    (localEa && localEa.includes('etoken')) ||
+    (localLegacy && localLegacy.includes('etoken')) ||
+    (server.ade && server.ade.configured) ||
+    (server.ea && server.ea.configured)
+  );
   $('cookieDot').className = 'dot' + (ok ? ' ok' : '');
   $('cookieLabel').textContent = ok ? 'Cookies ✓' : 'Cookies';
 }
