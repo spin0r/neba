@@ -20,13 +20,32 @@ body {
   font-family: var(--font);
   background: var(--bg);
   color: #f1f5f9;
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   align-items: flex-start;
   justify-content: center;
   -webkit-font-smoothing: antialiased;
-  overflow-y: auto;
-  overscroll-behavior-y: auto;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+/* ── Themed scrollbars (no white native bars) ── */
+.command-bar ::-webkit-scrollbar { width: 8px; height: 8px; }
+.command-bar ::-webkit-scrollbar-track { background: transparent; }
+.command-bar ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.command-bar ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+.command-bar ::-webkit-scrollbar-corner { background: transparent; }
+.body.visible, .list, .shots, .covers, .hist-list, .cookie-area, .modal {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 body::before {
   content: ''; position: fixed; inset: 0;
