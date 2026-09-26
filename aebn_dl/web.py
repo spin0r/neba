@@ -1,0 +1,510 @@
+"""Standalone web server + JSON API mirroring the Telegram bot actions.
+
+Serves a single-file Calcast-style frontend (``aebn_dl/static/index.html``)
+and exposes:
+
+- ``GET  /``                 frontend
+- ``GET  /health``           health check (``OK``)
+- ``GET  /api/auth-check``   200 when open or logged in, else 401
+- ``POST /api/login``        ``{"password": ...}`` -> auth cookie (only if WEB_PASSWORD set)
+- ``POST /api/logout``       clear auth cookie
+- ``POST /api/extract``      ``{"url": ..., "mode": "manifest"|"info", "cookies": "..."}``
+- ``GET  /api/cookies``      saved-cookie status (presence + expiry + account)
+- ``POST /api/cookies``      ``{"cookies": "..."}`` save global session
+- ``DELETE /api/cookies``    clear saved session
+
+Only the standard library is used so this works without the ``bot`` extra.
+Run standalone with ``aebndl-web`` (or ``python -m aebn_dl.web``).
+When the Telegram bot runs with ``PORT`` set, it serves this same app in a
+background thread instead of the plain ``OK`` health responder.
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import os
+import re
+import secrets
+from concurrent.futures import ThreadPoolExecutor
+from html import unescape as html_unescape
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+HERE = Path(__file__).resolve().parent
+STATIC_DIR = HERE / "static"
+COOKIES_FILE = HERE / "ade_cookies.json"
+
+WEB_PASSWORD = os.getenv("WEB_PASSWORD", "")
+DEFAULT_PROXY = os.getenv("AEBN_PROXY", "")
+DEFAULT_THREADS = int(os.getenv("AEBN_THREADS", "5"))
+
+executor = ThreadPoolExecutor(max_workers=8)
+_auth_tokens: set[str] = set()
+
+
+# ---------------------------------------------------------------------------
+# Small helpers (telegram-free copies of the bot logic)
+# ---------------------------------------------------------------------------
+
+def _is_open() -> bool:
+    return not WEB_PASSWORD
+
+
+def _authed(headers) -> bool:
+    if _is_open():
+        return True
+    cookie = headers.get("Cookie", "")
+    m = re.search(r"wauth=([a-f0-9]+)", cookie)
+    return bool(m) and m.group(1) in _auth_tokens
+
+
+def _cookie_expiry(cookie_text: str) -> dict[str, Any] | None:
+    """Extract etoken (or earliest) expiry from Netscape cookie text."""
+    if not cookie_text:
+        return None
+    etoken_exp = None
+    min_exp = None
+    for line in cookie_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 7:
+            try:
+                exp = int(parts[4].strip())
+            except ValueError:
+                continue
+            if exp > 0:
+                if parts[5].strip() == "etoken":
+                    etoken_exp = exp
+                    break
+                if min_exp is None or exp < min_exp:
+                    min_exp = exp
+    target = etoken_exp or min_exp
+    if not target:
+        return None
+    import datetime
+    utc = datetime.datetime.fromtimestamp(target, tz=datetime.timezone.utc)
+    now = int(datetime.datetime.now(tz=datetime.timezone.utc).timestamp())
+    delta = target - now
+    return {
+        "ts": target,
+        "date": utc.strftime("%d-%m-%Y %H:%M UTC"),
+        "expired": delta <= 0,
+        "seconds_left": max(delta, 0),
+    }
+
+
+def _load_saved_cookies() -> str:
+    try:
+        data = json.loads(COOKIES_FILE.read_text())
+        return data.get("0", "")
+    except Exception:
+        return ""
+
+
+def _save_global_cookies(cookie_text: str) -> None:
+    try:
+        data = json.loads(COOKIES_FILE.read_text()) if COOKIES_FILE.exists() else {}
+    except Exception:
+        data = {}
+    data["0"] = cookie_text
+    COOKIES_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _format_duration(duration_s: int | None) -> str:
+    if not duration_s or duration_s <= 0:
+        return "?"
+    h, rem = divmod(int(duration_s), 3600)
+    m = rem // 60
+    if h:
+        return f"{h}h {m:02d}m" if m else f"{h}h"
+    return f"{m} min" if m else f"{duration_s}s"
+
+
+def _parse_m3u8_variants(master_url: str, cookies: str = "") -> dict[int, str]:
+    from .ade_scraper import _get_session
+
+    try:
+        txt = _get_session(cookies or None).get(master_url, timeout=15).text
+    except Exception:
+        return {}
+    variants: dict[int, str] = {}
+    lines = txt.splitlines()
+    for i, line in enumerate(lines):
+        if "RESOLUTION=" in line:
+            m = re.search(r"RESOLUTION=\d+x(\d+)", line)
+            if m and i + 1 < len(lines):
+                url = lines[i + 1].strip()
+                if url and not url.startswith("#"):
+                    variants[int(m.group(1))] = url
+    return variants
+
+
+def _pick_preferred(variants: dict[int, str]) -> list[tuple[int, str]]:
+    picked = [(h, variants[h]) for h in (2160, 1080, 720, 480, 360, 240, 144) if h in variants]
+    seen = {h for h, _ in picked}
+    picked += [(h, variants[h]) for h in sorted(variants, reverse=True) if h not in seen]
+    return picked
+
+
+# ---------------------------------------------------------------------------
+# Extraction (mirrors bot._blocking_m3u8 / _blocking_ade_m3u8 / do_info)
+# ---------------------------------------------------------------------------
+
+def _extract_aebn(url: str) -> dict[str, Any]:
+    from .custom_session import CustomSession
+    from .manifest_parser import Manifest
+    from .movie_scraper import Movie
+
+    session = CustomSession(impersonate="chrome")
+    session.timeout = 30
+    session.headers["User-Agent"] = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+    )
+    for d in ("straight.aebn.com", "gay.aebn.com", "m.aebn.net", "vod.aebn.com"):
+        session.cookies.set(name="ageGated", value="true", domain=d, path="/", secure=True)
+    if DEFAULT_PROXY:
+        session.proxies = {"all": DEFAULT_PROXY}
+
+    movie = Movie(url, session)
+    try:
+        url_content_type = url.split("/")[3]
+        movie_id = url.split("/")[5]
+    except IndexError:
+        raise ValueError("Could not parse AEBN movie id from URL")
+    headers = {"content-type": "application/x-www-form-urlencoded"}
+    data = f"movieId={movie_id}&isPreview=true&format=DASH"
+    deliver_url = f"https://{url_content_type}.aebn.com/{url_content_type}/deliver"
+    manifest_url = session.post(deliver_url, headers=headers, data=data).json()["url"]
+    base_stream_url = manifest_url.rsplit("/", 1)[0]
+
+    resolutions = None
+    try:
+        m = Manifest(url, movie.total_duration_seconds, session)
+        m.base_stream_url = base_stream_url
+        m.parse_content(session.get(manifest_url).content)
+        resolutions = m.avaliable_resulutions
+    except Exception as e:
+        logger.warning("AEBN resolution probe failed: %s", e)
+
+    return {
+        "site": "AEBN",
+        "studio": movie.studio_name,
+        "title": movie.title,
+        "movie_title": movie.title,
+        "scene_title": "",
+        "movie_id": movie_id,
+        "scene_id": None,
+        "duration_s": movie.total_duration_seconds,
+        "duration": _format_duration(movie.total_duration_seconds),
+        "manifest_url": manifest_url,
+        "base_stream_url": base_stream_url,
+        "resolutions": resolutions,
+        "preferred_links": [],
+        "covers": [c for c in (movie.cover_url_front, movie.cover_url_back) if c],
+        "is_authorized": True,
+    }
+
+
+def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
+    from .ade_scraper import extract_ade_duration_seconds, get_ade_manifest
+
+    result = get_ade_manifest(url, cookies_str=cookies or None)
+    site = "EA" if "elegantangel.com" in url.lower() else "ADE"
+
+    resolutions = sorted({s.get("source_height", 0) for s in result.get("streams", []) if s.get("source_height")})
+    item_detail = result.get("item_detail", {})
+    scene_id = result.get("scene_id")
+    playlist_url = result.get("playlist_url", "")
+    duration_s = result.get("duration_s", 0) or extract_ade_duration_seconds(item_detail, scene_id, playlist_url)
+
+    preferred: list[tuple[int, str]] = []
+    try:
+        preferred = _pick_preferred(_parse_m3u8_variants(playlist_url, cookies))
+    except Exception:
+        pass
+
+    covers = [c for c in (item_detail.get("front_cover"), item_detail.get("back_cover"), item_detail.get("poster")) if c]
+    return {
+        "site": site,
+        "studio": html_unescape((item_detail.get("studio") or {}).get("name", "") if isinstance(item_detail.get("studio"), dict) else "Unknown"),
+        "title": html_unescape(result.get("title", "")),
+        "movie_title": html_unescape(result.get("movie_title") or result.get("title", "")),
+        "scene_title": html_unescape(result.get("scene_title", "")),
+        "movie_id": result.get("item_id"),
+        "scene_id": scene_id,
+        "duration_s": duration_s,
+        "duration": _format_duration(duration_s),
+        "manifest_url": playlist_url,
+        "resolutions": resolutions,
+        "preferred_links": [{"height": h, "url": u} for h, u in preferred],
+        "covers": covers,
+        "is_authorized": result.get("is_authorized", False),
+        "ppm_remaining": result.get("ppm_time_remaining", result.get("ppm_remaining", 0)),
+    }
+
+
+def _info_aebn(url: str) -> dict[str, Any]:
+    from .downloader import Downloader
+
+    dl = Downloader(url=url, proxy=DEFAULT_PROXY or None,
+                    proxy_metadata_only=bool(DEFAULT_PROXY),
+                    show_progress=False, log_level="ERROR")
+    dl._initialize_download()
+    movie = dl._scrape_movie_info()
+    dl._process_manifest(movie, requires_scene_boundaries=True)
+    data = _extract_aebn(url)
+    data.update({
+        "performers": movie.performers or [],
+        "scene_count": len(movie.scenes),
+        "scenes": [
+            {
+                "n": i + 1,
+                "performers": s.performers or [],
+                "start_s": getattr(s, "start_timing", None),
+                "end_s": getattr(s, "end_timing", None),
+            }
+            for i, s in enumerate(movie.scenes)
+        ],
+    })
+    return data
+
+
+def do_extract(url: str, mode: str, cookies: str) -> dict[str, Any]:
+    from .ade_scraper import ADE_URL_RE
+
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("Missing URL")
+    m = re.search(r"https?://\S+", url)
+    if m:
+        url = m.group(0).rstrip(")")
+    host = urlparse(url).netloc.lower()
+
+    effective_cookies = (cookies or "").strip() or _load_saved_cookies() or os.getenv("ADE_COOKIES", "")
+    cookies_source = "request" if (cookies or "").strip() else ("server" if effective_cookies else "none")
+
+    if ADE_URL_RE.search(url):
+        data = _extract_ade(url, effective_cookies)
+    elif "aebn.com" in host or "m.aebn.net" in host:
+        data = _info_aebn(url) if mode == "info" else _extract_aebn(url)
+    else:
+        raise ValueError("Unsupported URL — paste an AEBN, AdultDVDEmpire or Elegant Angel link")
+    data["cookies_source"] = cookies_source
+    data["source_url"] = url
+    return data
+
+
+def _account_info(cookies: str) -> dict[str, Any]:
+    from .ade_scraper import _get_session
+
+    session = _get_session(cookies or None)
+    r = session.get("https://www.adultdvdempire.com/account/accounthomepage")
+    r.raise_for_status()
+    html = r.text
+    email_m = re.search(r'text-success"></i>\s*([^<]+)', html)
+    ppm_m = re.search(r'ppm-minutes__total-minutes">(\d+)', html)
+    breakdown = re.findall(r"<dt>(Mins|Bonus Mins)</dt><dd>(\d+)</dd>", html)
+    membership_m = re.search(r"membership-status.*?total-minutes\">(.*?)</p>", html, re.DOTALL)
+    return {
+        "email": email_m.group(1).strip() if email_m else "Unknown",
+        "total_ppm": int(ppm_m.group(1)) if ppm_m else 0,
+        "mins": next((int(v) for k, v in breakdown if k == "Mins"), 0),
+        "bonus_mins": next((int(v) for k, v in breakdown if k == "Bonus Mins"), 0),
+        "membership": membership_m.group(1).strip() if membership_m else "Unknown",
+    }
+
+
+# ---------------------------------------------------------------------------
+# HTTP layer
+# ---------------------------------------------------------------------------
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "aebndl-web/1.0"
+
+    def log_message(self, fmt, *args):
+        logger.info("%s %s", self.address_string(), fmt % args)
+
+    def _send_json(self, obj: Any, status: int = 200, headers: dict | None = None):
+        body = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, path: Path, ctype: str):
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self) -> dict:
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = 0
+        if not length:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            return {}
+
+    def _require_auth(self) -> bool:
+        if not _authed(self.headers):
+            self._send_json({"error": "unauthorized"}, 401)
+            return False
+        return True
+
+    # -- GET ---------------------------------------------------------------
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/health":
+            body = b"OK"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/api/auth-check":
+            if _authed(self.headers):
+                self._send_json({"ok": True, "locked": not _is_open()})
+            else:
+                self._send_json({"error": "unauthorized"}, 401)
+            return
+
+        if path == "/api/cookies":
+            if not self._require_auth():
+                return
+            saved = _load_saved_cookies()
+            info: dict[str, Any] = {"configured": bool(saved and "etoken" in saved)}
+            if info["configured"]:
+                info["expiry"] = _cookie_expiry(saved)
+                try:
+                    info["account"] = executor.submit(_account_info, saved).result(timeout=30)
+                except Exception as e:
+                    info["account_error"] = str(e)
+            self._send_json(info)
+            return
+
+        if path in ("/", "/index.html"):
+            if not _authed(self.headers):
+                pass  # frontend shows the login view itself
+            index = STATIC_DIR / "index.html"
+            if index.exists():
+                self._send_file(index, "text/html; charset=utf-8")
+            else:
+                self._send_json({"error": "frontend not built"}, 500)
+            return
+
+        self._send_json({"error": "not found"}, 404)
+
+    # -- POST --------------------------------------------------------------
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/api/login":
+            body = self._read_json()
+            if _is_open() or hmac.compare_digest(str(body.get("password", "")), WEB_PASSWORD):
+                token = secrets.token_hex(16)
+                _auth_tokens.add(token)
+                self._send_json({"success": True}, headers={"Set-Cookie": f"wauth={token}; Path=/; HttpOnly; SameSite=Lax"})
+            else:
+                self._send_json({"error": "wrong password"}, 401)
+            return
+
+        if path == "/api/logout":
+            cookie = self.headers.get("Cookie", "")
+            m = re.search(r"wauth=([a-f0-9]+)", cookie)
+            if m:
+                _auth_tokens.discard(m.group(1))
+            self._send_json({"success": True}, headers={"Set-Cookie": "wauth=; Path=/; Max-Age=0"})
+            return
+
+        if not self._require_auth():
+            return
+
+        if path == "/api/extract":
+            body = self._read_json()
+            try:
+                data = executor.submit(
+                    do_extract,
+                    str(body.get("url", "")),
+                    str(body.get("mode", "manifest")),
+                    str(body.get("cookies", "") or ""),
+                ).result(timeout=600)
+                self._send_json({"success": True, "data": data})
+            except Exception as e:
+                logger.warning("extract failed: %s", e)
+                self._send_json({"success": False, "error": str(e)}, 200)
+            return
+
+        if path == "/api/cookies":
+            body = self._read_json()
+            cookie_text = str(body.get("cookies", "") or "")
+            if "etoken" not in cookie_text:
+                self._send_json({"success": False, "error": "No etoken found — paste the full Netscape cookie export"}, 200)
+                return
+            _save_global_cookies(cookie_text)
+            self._send_json({"success": True, "expiry": _cookie_expiry(cookie_text)})
+            return
+
+        self._send_json({"error": "not found"}, 404)
+
+    # -- DELETE ------------------------------------------------------------
+    def do_DELETE(self):
+        if urlparse(self.path).path == "/api/cookies":
+            if not self._require_auth():
+                return
+            _save_global_cookies("")
+            self._send_json({"success": True})
+            return
+        self._send_json({"error": "not found"}, 404)
+
+
+def create_server(port: int) -> ThreadingHTTPServer:
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    logger.info("Web UI listening on port %s", port)
+    return server
+
+
+def run_blocking(port: int) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s|%(levelname)s|%(message)s", datefmt="%H:%M:%S")
+    create_server(port).serve_forever()
+
+
+def start_in_background(port: int) -> ThreadingHTTPServer:
+    """Serve the web UI in a daemon thread (used by the Telegram bot entrypoint)."""
+    import threading
+
+    server = create_server(port)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def main():
+    port = int(os.getenv("PORT", "8000"))
+    print(f"Starting aebndl web UI on :{port}")
+    run_blocking(port)
+
+
+if __name__ == "__main__":
+    main()

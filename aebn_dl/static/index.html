@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AEBNDL — Manifest Bar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0e0e10;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', 'Cascadia Code', monospace;
+  --window-bg: rgba(30, 35, 45, 0.92);
+  --window-border: rgba(255, 255, 255, 0.12);
+  --window-shadow: 0 30px 90px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --card-bg: rgba(255, 255, 255, 0.065);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --pill-bg: rgba(255, 255, 255, 0.12);
+  --text-white: #ffffff;
+  --text-muted: #94a3b8;
+  --text-sub: #64748b;
+  --accent: #38bdf8;
+  --green: #34d399;
+  --item-selected: rgba(255, 255, 255, 0.08);
+}
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: #f1f5f9;
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: ''; position: fixed; inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(167,139,250,0.12), transparent),
+    radial-gradient(ellipse 60% 40% at 80% 110%, rgba(99,102,241,0.08), transparent),
+    radial-gradient(ellipse 50% 50% at 10% 90%, rgba(139,92,246,0.06), transparent);
+  pointer-events: none;
+}
+body::after {
+  content: ''; position: fixed; inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 60px 60px;
+  pointer-events: none;
+}
+.bar-wrapper {
+  position: relative; z-index: 10;
+  width: 740px; max-width: calc(100vw - 32px);
+  margin-top: 12vh; margin-bottom: 60px;
+  animation: modalPop 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes modalPop {
+  0% { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.command-bar {
+  background: var(--window-bg);
+  border: 1px solid var(--window-border);
+  border-radius: 12px;
+  box-shadow: var(--window-shadow);
+  backdrop-filter: blur(48px) saturate(1.8);
+  -webkit-backdrop-filter: blur(48px) saturate(1.8);
+  overflow: hidden;
+}
+.brand-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 20px 0 20px;
+}
+.brand { font-size: 12px; font-weight: 700; letter-spacing: 0.14em; color: var(--text-white); }
+.brand span { color: var(--text-sub); font-weight: 400; }
+.cookie-status {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11.5px; color: var(--text-muted);
+  background: none; border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 7px; padding: 4px 10px; cursor: pointer;
+  font-family: var(--font); transition: all .15s ease;
+}
+.cookie-status:hover { border-color: rgba(255,255,255,0.22); color: #fff; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-sub); flex-shrink: 0; }
+.dot.ok { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,.7); }
+.input-row { display: flex; align-items: center; padding: 0 20px; height: 58px; }
+.input-wrap { flex: 1; position: relative; height: 58px; display: flex; align-items: center; min-width: 0; }
+.input-field {
+  width: 100%; height: 58px; background: transparent; outline: none;
+  border: none; color: var(--text-white); caret-color: #93c5fd;
+  font-family: var(--font); font-size: 17px; font-weight: 500; letter-spacing: -0.01em;
+}
+.input-field::placeholder { color: rgba(255,255,255,0.32); font-weight: 400; }
+.mode-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 20px 12px 20px;
+}
+.mode-pill {
+  font-size: 12px; font-weight: 500; color: var(--text-muted);
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 7px; padding: 4px 12px; cursor: pointer; transition: all .15s ease;
+  font-family: var(--font);
+}
+.mode-pill:hover { color: #fff; border-color: rgba(255,255,255,0.2); }
+.mode-pill.active { color: #fff; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.22); }
+.mode-hint { margin-left: auto; font-size: 11.5px; color: var(--text-sub); }
+.body { display: none; border-top: 1px solid rgba(255,255,255,0.08); padding: 10px 0 0 0; }
+.body.visible { display: block; animation: expandBody .25s cubic-bezier(0.16,1,0.3,1) forwards; }
+@keyframes expandBody { 0% { opacity: 0; transform: translateY(-4px); } 100% { opacity: 1; transform: translateY(0); } }
+.section-label {
+  font-size: 12px; font-weight: 500; color: var(--text-muted);
+  padding: 8px 20px 6px 20px; user-select: none;
+  display: flex; align-items: center; gap: 8px;
+}
+.hero-card {
+  margin: 4px 16px 14px 16px;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: 10px; display: flex; align-items: stretch;
+  min-height: 135px; cursor: pointer; position: relative;
+  transition: background .15s ease, border-color .15s ease, transform .1s ease;
+  user-select: none;
+}
+.hero-card:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.13); }
+.hero-card:active { transform: scale(0.995); }
+.hero-half {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 20px; text-align: center; min-width: 0;
+}
+.hero-value {
+  font-size: 19px; font-weight: 600; color: var(--text-white);
+  line-height: 1.35; word-break: break-word; max-width: 100%;
+}
+.hero-value.small { font-size: 13px; font-weight: 500; font-family: var(--mono); color: #e2e8f0; }
+.hero-sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.hero-pill {
+  margin-top: 12px; padding: 3px 12px; border-radius: 6px;
+  background: var(--pill-bg); border: 1px solid rgba(255,255,255,0.08);
+  color: #e2e8f0; font-size: 11.5px; font-weight: 500; display: inline-block; white-space: nowrap;
+}
+.hero-divider { display: flex; align-items: center; justify-content: center; position: relative; width: 1px; background: rgba(255,255,255,0.08); margin: 14px 0; }
+.hero-arrow { position: absolute; width: 20px; height: 20px; color: #fff; left: 50%; top: 50%; transform: translate(-50%,-50%); opacity: .9; }
+.footer { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 16px 12px 16px; flex-wrap: wrap; }
+.action-pill-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px; padding: 5px 10px; cursor: pointer;
+  color: #f1f5f9; font-size: 12.5px; font-weight: 500;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+  transition: all .15s ease; user-select: none; font-family: var(--font);
+}
+.action-pill-btn:hover { background: rgba(255,255,255,0.13); border-color: rgba(255,255,255,0.2); }
+.action-pill-btn:active { transform: scale(0.97); }
+.action-pill-btn.copied { background: rgba(16,185,129,0.2); border-color: rgba(16,185,129,0.4); color: var(--green); }
+.action-pill-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.1);
+  font-size: 11.5px; font-weight: 600; color: var(--text-muted); line-height: 1;
+}
+.list { max-height: 300px; overflow-y: auto; padding: 0 10px 6px 10px; }
+.row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-radius: 8px; cursor: pointer; transition: background .12s ease;
+  gap: 10px;
+}
+.row:hover { background: var(--item-selected); }
+.row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.row-icon {
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: rgba(255,255,255,0.08);
+  font-size: 11px; font-weight: 700; color: var(--text-white); flex-shrink: 0;
+}
+.row-icon.hi { color: var(--green); }
+.row-name { font-size: 13.5px; font-weight: 500; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-mono { font-size: 11px; color: var(--text-sub); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+.row-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.row-tag { font-size: 11px; color: var(--text-sub); }
+.kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06);
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+}
+.kv { padding: 0 20px 6px 20px; }
+.kv-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 7px 0; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.kv-row:last-child { border-bottom: none; }
+.kv-k { color: var(--text-sub); flex-shrink: 0; }
+.kv-v { color: #e2e8f0; text-align: right; word-break: break-word; }
+.kv-v.mono { font-family: var(--mono); font-size: 12px; }
+.covers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 4px 16px 14px 16px; }
+.covers img { width: 100%; border-radius: 8px; border: 1px solid var(--card-border); cursor: pointer; display: block; }
+.covers img:hover { border-color: rgba(255,255,255,0.25); }
+.hist-list { max-height: 260px; overflow-y: auto; padding: 0 10px 6px 10px; }
+.hist-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; border-radius: 8px; cursor: pointer; gap: 10px;
+}
+.hist-item:hover { background: var(--item-selected); }
+.hist-url { font-size: 13px; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; }
+.hist-meta { font-size: 11.5px; color: var(--text-sub); flex-shrink: 0; }
+.hist-clear { background: none; border: none; color: var(--text-sub); font-size: 12px; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-family: var(--font); }
+.hist-clear:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.hist-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 20px 8px 20px; }
+.hist-title { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.loading { display: flex; align-items: center; gap: 10px; padding: 22px; justify-content: center; color: var(--text-muted); font-size: 13px; }
+.spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.15); border-top-color: #fff; border-radius: 50%; animation: spin .6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.error-box { margin: 4px 16px 14px 16px; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3); border-radius: 10px; padding: 14px 16px; font-size: 13px; color: #fca5a5; word-break: break-word; }
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200; padding: 20px; backdrop-filter: blur(4px);
+}
+.modal {
+  background: rgba(30,35,45,0.97); border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 12px; padding: 22px; width: 100%; max-width: 560px;
+  box-shadow: var(--window-shadow); animation: modalPop .18s ease;
+  max-height: 88vh; overflow-y: auto;
+}
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.modal-title { font-size: 14px; font-weight: 600; }
+.modal-close { background: none; border: none; color: var(--text-sub); font-size: 18px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.modal-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.modal-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.55; }
+.modal-sub code { font-family: var(--mono); font-size: 11px; color: #e2e8f0; }
+.cookie-area {
+  width: 100%; min-height: 130px; resize: vertical;
+  background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px; color: #e2e8f0; font-family: var(--mono); font-size: 11.5px;
+  padding: 10px 12px; outline: none; line-height: 1.5;
+}
+.cookie-area:focus { border-color: rgba(255,255,255,0.3); }
+.cookie-status-line { font-size: 12px; color: var(--text-muted); margin-top: 10px; line-height: 1.6; }
+.cookie-status-line.ok { color: var(--green); }
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 7px; font-size: 12.5px; font-weight: 500;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.07);
+  color: #e2e8f0; cursor: pointer; transition: all .15s ease; font-family: var(--font);
+}
+.btn:hover { background: rgba(255,255,255,0.13); color: #fff; }
+.btn.primary { background: #fff; color: #0e0e10; border-color: #fff; font-weight: 600; }
+.btn.primary:hover { background: #e2e8f0; }
+.btn.danger { color: #f87171; border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08); }
+.btn.danger:hover { background: rgba(239,68,68,0.16); color: #fca5a5; }
+.toast {
+  position: fixed; bottom: 28px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(30,36,48,0.95); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 10px; padding: 10px 18px;
+  display: flex; align-items: center; gap: 10px;
+  color: #fff; font-size: 13.5px; font-weight: 500;
+  box-shadow: 0 12px 36px rgba(0,0,0,0.5);
+  opacity: 0; pointer-events: none;
+  transition: all .25s cubic-bezier(0.16,1,0.3,1); z-index: 300;
+  max-width: calc(100vw - 40px);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast svg { width: 16px; height: 16px; color: var(--green); flex-shrink: 0; }
+.toast.err svg { color: #f87171; }
+.login-wrap { display: flex; flex-direction: column; gap: 10px; padding: 6px 20px 18px 20px; }
+.login-input {
+  background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px; color: #fff; font-size: 14px; padding: 9px 12px; outline: none;
+  font-family: var(--font); width: 100%;
+}
+.login-input:focus { border-color: rgba(255,255,255,0.3); }
+@media (max-width: 640px) {
+  .bar-wrapper { margin-top: 6vh; }
+  .hero-card { flex-direction: column; min-height: 0; }
+  .hero-divider { width: auto; height: 1px; margin: 0 14px; }
+  .hero-arrow { transform: translate(-50%,-50%) rotate(90deg); }
+  .covers { grid-template-columns: 1fr; }
+  .row-mono { max-width: 180px; }
+}
+</style>
+</head>
+<body>
+<div class="bar-wrapper">
+  <div class="command-bar" id="commandBar">
+    <div class="brand-row">
+      <div class="brand">AEBN<span>DL</span></div>
+      <button class="cookie-status" id="cookieBtn" title="Manage cookies">
+        <span class="dot" id="cookieDot"></span><span id="cookieLabel">Cookies</span>
+      </button>
+    </div>
+    <div class="input-row">
+      <div class="input-wrap">
+        <input type="text" class="input-field" id="urlInput"
+          placeholder="Paste AEBN / ADE / Elegant Angel link…  (↵ fetch)"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus />
+      </div>
+    </div>
+    <div class="mode-row" id="modeRow">
+      <button class="mode-pill active" data-mode="manifest">Manifest</button>
+      <button class="mode-pill" data-mode="info">Info</button>
+      <button class="mode-pill" data-mode="covers">Covers</button>
+      <span class="mode-hint" id="srcHint"></span>
+    </div>
+    <div class="body" id="resultBody"></div>
+    <div class="body" id="histBody">
+      <div class="hist-header">
+        <span class="hist-title">Recent links</span>
+        <button class="hist-clear" id="clearHist">Clear</button>
+      </div>
+      <div class="hist-list" id="histList"></div>
+    </div>
+    <div class="body" id="loginBody">
+      <div class="section-label">Locked</div>
+      <div class="login-wrap">
+        <input type="password" class="login-input" id="loginPass" placeholder="Password…  (↵ unlock)" />
+        <button class="btn primary" id="loginBtn" style="align-self:flex-end">Unlock</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+  <span id="toastText">Copied</span>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const urlInput = $('urlInput'), resultBody = $('resultBody'), histBody = $('histBody');
+let mode = 'manifest';
+let lastData = null;
+let authed = true;
+
+// ── Toast ──
+let toastTimer;
+function toast(msg, err = false) {
+  $('toastText').textContent = msg;
+  $('toast').classList.toggle('err', err);
+  $('toast').classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2200);
+}
+
+// ── Copy ──
+async function copyText(t, label = 'Copied') {
+  try { await navigator.clipboard.writeText(t); }
+  catch {
+    const ta = document.createElement('textarea');
+    ta.value = t; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove();
+  }
+  toast(label);
+}
+
+// ── API ──
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    ...opts,
+  });
+  if (res.status === 401) { showLogin(); throw new Error('locked'); }
+  return res.json();
+}
+
+// ── History (localStorage) ──
+function getHist() {
+  try { return JSON.parse(localStorage.getItem('ae_hist') || '[]'); } catch { return []; }
+}
+function pushHist(url, title) {
+  let h = getHist().filter(x => x.url !== url);
+  h.unshift({ url, title: title || '', t: Date.now() });
+  localStorage.setItem('ae_hist', JSON.stringify(h.slice(0, 20)));
+  renderHist();
+}
+function renderHist() {
+  const h = getHist();
+  $('histList').innerHTML = h.length ? h.map((x, i) => `
+    <div class="hist-item" data-i="${i}">
+      <span class="hist-url">${esc(x.url)}</span>
+      <span class="hist-meta">${esc(x.title || '')}</span>
+    </div>`).join('')
+    : '<div class="hist-item"><span class="hist-meta">Nothing yet — paste a link above.</span></div>';
+  document.querySelectorAll('.hist-item[data-i]').forEach(el => {
+    el.onclick = () => {
+      urlInput.value = getHist()[+el.dataset.i].url;
+      fetchExtract();
+    };
+  });
+}
+$('clearHist').onclick = () => { localStorage.removeItem('ae_hist'); renderHist(); };
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Modes ──
+document.querySelectorAll('.mode-pill').forEach(p => {
+  p.onclick = () => {
+    document.querySelectorAll('.mode-pill').forEach(x => x.classList.remove('active'));
+    p.classList.add('active');
+    mode = p.dataset.mode;
+    if (lastData) render(lastData);
+  };
+});
+
+// ── Fetch ──
+urlInput.addEventListener('input', () => {
+  if (!urlInput.value.trim()) { resultBody.classList.remove('visible'); histBody.classList.add('visible'); }
+});
+urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') fetchExtract(); });
+
+async function fetchExtract() {
+  const url = urlInput.value.trim();
+  if (!url) return;
+  histBody.classList.remove('visible');
+  resultBody.classList.add('visible');
+  resultBody.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching manifest…</div>';
+  try {
+    const cookies = localStorage.getItem('ae_cookies') || '';
+    const r = await api('/api/extract', {
+      method: 'POST',
+      body: JSON.stringify({ url, mode, cookies }),
+    });
+    if (!r.success) throw new Error(r.error || 'Extraction failed');
+    lastData = r.data;
+    pushHist(r.data.source_url || url, r.data.movie_title || r.data.title);
+    render(r.data);
+  } catch (e) {
+    if (e.message === 'locked') return;
+    resultBody.innerHTML = `<div class="section-label">Error</div><div class="error-box">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Render ──
+function fmtRes(rs) {
+  if (!rs || !rs.length) return 'N/A';
+  const s = [...rs].sort((a, b) => a - b);
+  return s.length > 2 ? `${s[0]}p – ${s[s.length - 1]}p` : s.map(r => r + 'p').join(', ');
+}
+
+function render(d) {
+  const effMode = mode === 'covers' ? 'covers' : (mode === 'info' ? 'info' : 'manifest');
+  if (effMode === 'info') return renderInfo(d);
+  if (effMode === 'covers') return renderCovers(d);
+  return renderManifest(d);
+}
+
+function headerLabel(d) {
+  const site = d.site || '?';
+  const t = d.scene_title ? `${d.movie_title} — ${d.scene_title}` : (d.movie_title || d.title || 'Unknown');
+  return { site, t };
+}
+
+function renderManifest(d) {
+  const { site, t } = headerLabel(d);
+  const links = d.preferred_links || [];
+  const master = d.manifest_url || '';
+  const best = links.length ? links[0] : null;
+  $('srcHint').textContent = d.cookies_source ? `via ${d.cookies_source} cookies` : '';
+
+  const heroRight = best
+    ? `<div class="hero-value">${best.height}p</div><div class="hero-sub">best stream · click to copy</div><div class="hero-pill">${esc(d.duration || '')} · ${esc(fmtRes(d.resolutions))}</div>`
+    : `<div class="hero-value small">${esc(master.slice(0, 90))}…</div><div class="hero-sub">master playlist · click to copy</div>`;
+
+  const rows = links.map((l, i) => `
+    <div class="row" data-copy="${esc(l.url)}" title="Click to copy ${l.height}p link">
+      <div class="row-left">
+        <span class="row-icon ${l.height >= 1080 ? 'hi' : ''}">${l.height >= 2160 ? '4K' : l.height + 'p'}</span>
+        <span class="row-name">${l.height}p${l.height >= 2160 ? ' (UHD)' : l.height >= 1080 ? ' (Full HD)' : l.height >= 720 ? ' (HD)' : ''}</span>
+        <span class="row-mono">${esc(l.url.slice(0, 80))}…</span>
+      </div>
+      <div class="row-right"><span class="row-tag">copy</span></div>
+    </div>`).join('');
+
+  resultBody.innerHTML = `
+    <div class="section-label">[${esc(site)}] Manifest</div>
+    <div class="hero-card" id="heroCopy" title="Click to copy">
+      <div class="hero-half">
+        <div class="hero-value">${esc(t)}</div>
+        <div class="hero-sub">${esc(d.studio || '')}</div>
+        <div class="hero-pill">${esc(d.duration || '')} · ${(d.scene_id ? 'Scene ' + esc(String(d.scene_id)) : 'ID ' + esc(String(d.movie_id ?? '')))}</div>
+      </div>
+      <div class="hero-divider"><svg class="hero-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="13 6 19 12 13 18" /></svg></div>
+      <div class="hero-half">${heroRight}</div>
+    </div>
+    ${links.length ? `<div class="section-label">Variant streams</div><div class="list">${rows}</div>` : ''}
+    ${master ? `<div class="section-label">Master playlist</div><div class="list">
+      <div class="row" data-copy="${esc(master)}" title="Click to copy master URL">
+        <div class="row-left"><span class="row-icon">M3</span><span class="row-mono">${esc(master.slice(0, 90))}…</span></div>
+        <div class="row-right"><span class="row-tag">copy</span></div>
+      </div></div>` : ''}
+    <div class="footer">
+      <button class="action-pill-btn" id="btnCopyBest">Copy ${best ? best.height + 'p' : 'manifest'} <span class="action-pill-kbd">↵</span></button>
+      <button class="action-pill-btn" id="btnRefresh">Refresh</button>
+      ${d.covers && d.covers.length ? `<button class="action-pill-btn" id="btnCovers">Covers</button>` : ''}
+    </div>`;
+
+  $('heroCopy').onclick = () => copyText(best ? best.url : master, best ? `Copied ${best.height}p link` : 'Copied master URL');
+  $('btnCopyBest').onclick = () => copyText(best ? best.url : master, 'Copied');
+  $('btnRefresh').onclick = fetchExtract;
+  const bc = $('btnCovers');
+  if (bc) bc.onclick = () => {
+    document.querySelector('[data-mode="covers"]').click();
+  };
+  resultBody.querySelectorAll('.row[data-copy]').forEach(r => {
+    r.onclick = () => copyText(r.dataset.copy, 'Copied link');
+  });
+}
+
+function renderInfo(d) {
+  const { site, t } = headerLabel(d);
+  const perf = (d.performers || []).join(', ');
+  const scenes = (d.scenes || []).map(s =>
+    `<div class="kv-row"><span class="kv-k">Scene ${s.n}</span><span class="kv-v">${esc((s.performers || []).join(', ') || '—')}</span></div>`).join('');
+  resultBody.innerHTML = `
+    <div class="section-label">[${esc(site)}] Info</div>
+    <div class="kv">
+      <div class="kv-row"><span class="kv-k">Title</span><span class="kv-v">${esc(t)}</span></div>
+      <div class="kv-row"><span class="kv-k">Studio</span><span class="kv-v">${esc(d.studio || 'Unknown')}</span></div>
+      <div class="kv-row"><span class="kv-k">Duration</span><span class="kv-v">${esc(d.duration || '?')}</span></div>
+      <div class="kv-row"><span class="kv-k">Resolutions</span><span class="kv-v mono">${esc(fmtRes(d.resolutions))}</span></div>
+      ${d.scene_count ? `<div class="kv-row"><span class="kv-k">Scenes</span><span class="kv-v">${d.scene_count}</span></div>` : ''}
+      ${perf ? `<div class="kv-row"><span class="kv-k">Performers</span><span class="kv-v">${esc(perf)}</span></div>` : ''}
+      ${scenes}
+    </div>
+    <div class="footer">
+      <button class="action-pill-btn" id="btnGoManifest">Get manifest <span class="action-pill-kbd">↵</span></button>
+    </div>`;
+  $('btnGoManifest').onclick = () => document.querySelector('[data-mode="manifest"]').click();
+}
+
+function renderCovers(d) {
+  const covers = d.covers || [];
+  resultBody.innerHTML = `
+    <div class="section-label">Covers (${covers.length})</div>
+    ${covers.length ? `<div class="covers">${covers.map((c, i) =>
+      `<img src="${esc(c)}" data-i="${i}" title="Click to open full size" loading="lazy" />`).join('')}</div>`
+    : '<div class="error-box">No covers found for this title.</div>'}
+    <div class="footer">
+      ${covers.map((c, i) => `<button class="action-pill-btn" data-open="${esc(c)}">${i === 0 ? 'Front' : i === 1 ? 'Back' : 'Cover ' + (i + 1)}</button>`).join('')}
+    </div>`;
+  resultBody.querySelectorAll('img[data-i]').forEach(img => {
+    img.onclick = () => window.open(covers[+img.dataset.i], '_blank');
+  });
+  resultBody.querySelectorAll('[data-open]').forEach(b => {
+    b.onclick = () => copyText(b.dataset.open, 'Copied cover URL');
+  });
+}
+
+// ── Cookies modal ──
+function openCookies() {
+  const saved = localStorage.getItem('ae_cookies') || '';
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay';
+  ov.innerHTML = `
+    <div class="modal">
+      <div class="modal-header"><span class="modal-title">Session cookies</span><button class="modal-close" id="mClose">×</button></div>
+      <div class="modal-sub">Export with the <b>Cookie-Editor</b> browser extension in <b>Netscape format</b> from
+        <code>adultdvdempire.com</code> or <code>elegantangel.com</code>, then paste below.
+        Stored in this browser (<code>localStorage</code>) and sent with each request; <b>Save to server</b> also persists it for the bot/API fallback.</div>
+      <textarea class="cookie-area" id="mArea" placeholder="# Netscape HTTP Cookie File&#10;...paste here...">${esc(saved)}</textarea>
+      <div class="cookie-status-line" id="mStatus">Checking server session…</div>
+      <div class="modal-actions">
+        <button class="btn" id="mImport">Import file</button>
+        <button class="btn" id="mExport">Export</button>
+        <button class="btn danger" id="mClear">Clear</button>
+        <button class="btn" id="mServer">Save to server</button>
+        <button class="btn primary" id="mSave">Save in browser</button>
+      </div>
+      <input type="file" id="mFile" accept=".txt,.cookies" style="display:none" />
+    </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  $('mClose').onclick = close;
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+
+  api('/api/cookies').then(r => {
+    const el = $('mStatus');
+    if (!r.configured) { el.textContent = 'No server session saved.'; return; }
+    el.classList.add('ok');
+    const exp = r.expiry ? `expiry ${r.expiry.date}${r.expiry.expired ? ' (EXPIRED)' : ''}` : 'no expiry parsed';
+    const acc = r.account ? ` · ${r.account.email} · ${r.account.total_ppm} min` : (r.account_error ? ' · account lookup failed' : '');
+    el.textContent = `Server session active — ${exp}${acc}`;
+  }).catch(() => { $('mStatus').textContent = 'Could not reach server.'; });
+
+  $('mSave').onclick = () => {
+    const v = $('mArea').value;
+    if (v && !v.includes('etoken')) { toast('No etoken found in pasted cookies', true); return; }
+    if (v) localStorage.setItem('ae_cookies', v); else localStorage.removeItem('ae_cookies');
+    refreshCookieBadge();
+    toast('Cookies saved in browser');
+    close();
+  };
+  $('mServer').onclick = async () => {
+    const v = $('mArea').value.trim();
+    if (!v) { toast('Paste cookies first', true); return; }
+    const r = await api('/api/cookies', { method: 'POST', body: JSON.stringify({ cookies: v }) });
+    if (r.success) { toast('Server session saved'); $('mStatus').textContent = 'Server session active.'; }
+    else toast(r.error || 'Save failed', true);
+  };
+  $('mClear').onclick = async () => {
+    localStorage.removeItem('ae_cookies');
+    await api('/api/cookies', { method: 'DELETE' }).catch(() => {});
+    refreshCookieBadge();
+    toast('Cookies cleared');
+    close();
+  };
+  $('mImport').onclick = () => $('mFile').click();
+  $('mFile').onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { $('mArea').value = rd.result; toast('File loaded — review & save'); };
+    rd.readAsText(f);
+  };
+  $('mExport').onclick = () => {
+    const v = $('mArea').value || localStorage.getItem('ae_cookies') || '';
+    if (!v) { toast('Nothing to export', true); return; }
+    const blob = new Blob([v], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'adecookies.txt';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('Exported adecookies.txt');
+  };
+}
+$('cookieBtn').onclick = openCookies;
+
+async function refreshCookieBadge() {
+  const local = localStorage.getItem('ae_cookies');
+  let server = false;
+  try { server = (await api('/api/cookies')).configured; } catch {}
+  const ok = Boolean((local && local.includes('etoken')) || server);
+  $('cookieDot').className = 'dot' + (ok ? ' ok' : '');
+  $('cookieLabel').textContent = ok ? 'Cookies ✓' : 'Cookies';
+}
+
+// ── Login ──
+function showLogin() {
+  authed = false;
+  $('loginBody').classList.add('visible');
+  resultBody.classList.remove('visible');
+  histBody.classList.remove('visible');
+}
+async function doLogin() {
+  const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('loginPass').value }) }).catch(() => null);
+  if (r && r.success) {
+    authed = true;
+    $('loginBody').classList.remove('visible');
+    renderHist();
+    histBody.classList.add('visible');
+    toast('Unlocked');
+  } else toast('Wrong password', true);
+}
+$('loginBtn').onclick = doLogin;
+$('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+
+// ── Init ──
+(async function init() {
+  renderHist();
+  try {
+    await api('/api/auth-check');
+    histBody.classList.add('visible');
+  } catch { showLogin(); }
+  refreshCookieBadge();
+})();
+</script>
+</body>
+</html>

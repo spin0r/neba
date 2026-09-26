@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: aebn-bot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ALLOWED_USER_IDS
+        sync: false
+      - key: ADE_COOKIES_URL
+        sync: false
+      - key: WEB_PASSWORD
+        sync: false
