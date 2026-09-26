@@ -43,6 +43,25 @@ logger = logging.getLogger(__name__)
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
 COOKIES_FILE = HERE / "ade_cookies.json"
+FRONTEND_DIST = HERE.parent / "frontend" / "dist"
+
+_ASSET_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".png": "image/png",
+    ".woff2": "font/woff2",
+}
+
+
+def _frontend_index() -> Path | None:
+    dist_index = FRONTEND_DIST / "index.html"
+    if dist_index.exists():
+        return dist_index
+    static_index = STATIC_DIR / "index.html"
+    return static_index if static_index.exists() else None
 
 try:
     from dotenv import load_dotenv
@@ -513,11 +532,19 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html", "/cookies"):
             if not _authed(self.headers):
                 pass  # frontend shows the login view itself
-            index = STATIC_DIR / "index.html"
-            if index.exists():
+            index = _frontend_index()
+            if index is not None:
                 self._send_file(index, "text/html; charset=utf-8")
             else:
                 self._send_json({"error": "frontend not built"}, 500)
+            return
+
+        if path.startswith("/assets/"):
+            asset = (FRONTEND_DIST / path.lstrip("/")).resolve()
+            if FRONTEND_DIST.resolve() in asset.parents and asset.is_file():
+                self._send_file(asset, _ASSET_TYPES.get(asset.suffix.lower(), "application/octet-stream"))
+            else:
+                self._send_json({"error": "not found"}, 404)
             return
 
         self._send_json({"error": "not found"}, 404)

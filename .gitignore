@@ -8,3 +8,5 @@ __pycache__
 *.log
 .env
 ade_cookies.json
+frontend/dist/
+frontend/node_modules/

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Manifest Bar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div class="bar-wrapper">
+  <div class="command-bar" id="commandBar">
+    <div class="input-row">
+      <div class="input-wrap">
+        <input type="text" class="input-field" id="urlInput"
+          placeholder="Paste AEBN / ADE / Elegant Angel link…  (↵ fetch)"
+          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" autofocus />
+      </div>
+    </div>
+    <div class="mode-row" id="modeRow">
+      <button class="mode-pill active" data-mode="manifest">Manifest</button>
+      <button class="mode-pill" data-mode="info">Info</button>
+      <button class="mode-pill" data-mode="covers">Covers</button>
+      <span class="mode-hint" id="srcHint"></span>
+    </div>
+    <div class="body" id="resultBody"></div>
+    <div class="body" id="cookiesPage"></div>
+    <div class="body" id="histBody">
+      <div class="hist-header">
+        <span class="hist-title">Recent links</span>
+        <button class="hist-clear" id="clearHist">Clear</button>
+      </div>
+      <div class="hist-list" id="histList"></div>
+    </div>
+    <div class="body" id="loginBody">
+      <div class="section-label">Locked</div>
+      <div class="login-wrap">
+        <input type="password" class="login-input" id="loginPass" placeholder="Password…  (↵ unlock)" />
+        <button class="btn primary" id="loginBtn" style="align-self:flex-end">Unlock</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+  <span id="toastText">Copied</span>
+</div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
