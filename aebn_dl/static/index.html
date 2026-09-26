@@ -712,6 +712,73 @@ function refreshServerStatus(root, prefix) {
   });
 }
 
+// ── Export all / Import all (both sites, one file) ──
+function exportAllCookies() {
+  const data = { version: 1, exported_at: new Date().toISOString(), ade: '', ea: '' };
+  for (const s of COOKIE_SITES) {
+    const area = cookiesPage.querySelector(`#pg-area-${s.site}`);
+    data[s.site] = (area && area.value.trim()) || localStorage.getItem(s.store) || '';
+  }
+  if (!data.ade && !data.ea) { toast('Nothing to export', true); return; }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'all-cookies.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Exported all-cookies.json');
+}
+
+function fillSiteBox(site, text) {
+  const cfg = COOKIE_SITES.find(x => x.site === site);
+  const area = cookiesPage.querySelector(`#pg-area-${site}`);
+  if (area) area.value = text;
+  storeCookies(cfg, text.trim(), true);
+}
+
+function importAllCookies(e) {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const text = String(rd.result || '');
+    // 1. Our own export-all JSON format
+    try {
+      const obj = JSON.parse(text);
+      if (obj && (typeof obj.ade === 'string' || typeof obj.ea === 'string')) {
+        let n = 0;
+        for (const s of COOKIE_SITES) {
+          if (obj[s.site] && String(obj[s.site]).includes('etoken')) { fillSiteBox(s.site, String(obj[s.site])); n++; }
+        }
+        toast(n ? `Imported ${n} site${n > 1 ? 's' : ''} — tap Server to persist` : 'No valid cookies in file', !n);
+        return;
+      }
+    } catch { /* not JSON — fall through to Netscape handling */ }
+    // 2. Raw Netscape export: split lines per site by domain
+    const lines = text.splitlines ? text.splitlines() : text.split(/\r?\n/);
+    const header = lines.filter(l => l.trim().startsWith('#'));
+    const buckets = { ade: [], ea: [] };
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const host = t.split(/[\t ]+/)[0].toLowerCase();
+      if (host.includes('elegantangel')) buckets.ea.push(line);
+      else buckets.ade.push(line);
+    }
+    let n = 0;
+    for (const s of COOKIE_SITES) {
+      if (!buckets[s.site].length) continue;
+      const combined = [...header, ...buckets[s.site]].join('\n');
+      if (!combined.includes('etoken')) continue;
+      fillSiteBox(s.site, combined);
+      n++;
+    }
+    toast(n ? `Imported ${n} site${n > 1 ? 's' : ''} — tap Server to persist` : 'No valid cookies in file', !n);
+  };
+  rd.readAsText(f);
+}
+
 // ── Page router: extract | cookies ──
 let page = 'extract';
 const cookiesPage = $('cookiesPage');
@@ -730,8 +797,18 @@ function showPage(next) {
     if (!cookiesPageBuilt) {
       cookiesPage.innerHTML = `
         <div class="section-label">Cookies — paste once, stored automatically</div>
-        <div class="cookie-page">${cookieBoxesHTML('pg')}</div>`;
+        <div class="cookie-page">
+          <div class="modal-actions" style="justify-content:flex-start;margin:0 12px 12px 12px;">
+            <button class="btn" id="pgExportAll">Export all</button>
+            <button class="btn" id="pgImportAll">Import all</button>
+            <input type="file" id="pgImportFile" accept=".json,.txt,.cookies" style="display:none" />
+          </div>
+          ${cookieBoxesHTML('pg')}
+        </div>`;
       wireCookieBoxes(cookiesPage, 'pg');
+      $('pgExportAll').onclick = exportAllCookies;
+      $('pgImportAll').onclick = () => $('pgImportFile').click();
+      $('pgImportFile').onchange = importAllCookies;
       cookiesPageBuilt = true;
     } else {
       // refresh textarea values from storage in case another tab changed them
