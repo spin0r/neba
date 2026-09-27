@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 try:
     from .custom_session import CustomSession
@@ -210,6 +211,72 @@ def _extract_player_params(html: str) -> dict[str, str] | None:
         }
 
     return None
+
+
+def _page_title(html: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    return re.sub(r"\s+", " ", html_unescape(m.group(1))).strip()[:90] if m else ""
+
+
+def _no_player_cause(html: str, final_url: str) -> str:
+    """Explain *why* a fetched page carried no player init params."""
+    low = html.lower()
+
+    if "aevideoplayer" in low:
+        return "the page does contain a video player, but its parameters could not be parsed"
+    if any(m in low for m in (
+        "cf-browser-verification", "challenge-platform", "cf-chl", "turnstile",
+        "just a moment", "checking your browser", "enable javascript and cookies",
+    )):
+        return "the site answered with a bot-check challenge page"
+
+    # Sessions without a valid etoken get bounced to the site root (HTTP 200).
+    u = urlparse(final_url)
+    if u.netloc and not u.path.strip("/"):
+        return "the site bounced the request back to its homepage — the login session (etoken) is missing or expired"
+    if any(m in low for m in ("member login", "forgot password", "sign in to", "account/login")):
+        return "the site redirected to a login page — the session cookies are missing or expired"
+    if any(m in low for m in ("are you 18", "age verification", "agegate", "verify your age")):
+        return "the site is asking for age verification — the cookies are missing"
+
+    title = _page_title(html)
+    return f"the page came back with no video player (page title: '{title}')" if title \
+        else "the page came back empty, with no video player"
+
+
+def _cookie_hint(cookies_str: str | None, site: str, box: str) -> str:
+    if not cookies_str:
+        return f"no cookies were supplied — paste your {site} session in the Cookies page, box '{box}'"
+    if not re.search(r"\betoken\b", cookies_str):
+        return f"the cookies in use contain no etoken — paste a fresh {site} session in the Cookies page, box '{box}'"
+    return f"the session was refused, so the etoken is likely expired — refresh your {site} session in the Cookies page, box '{box}'"
+
+
+def _upper_first(s: str) -> str:
+    return s[0].upper() + s[1:] if s else s
+
+
+def _site_for_url(url: str) -> tuple[str, str]:
+    host = urlparse(url or "").netloc.lower()
+    return ("Elegant Angel", "ea") if "elegantangel" in host else ("AdultDVDEmpire", "ade")
+
+
+def _auth_error(cookies_str: str | None, final_url: str = "") -> ValueError:
+    site, box = _site_for_url(final_url)
+    logger.warning("Not authorized for %s (final_url=%s, cookies=%d bytes)",
+                   site, final_url or "?", len(cookies_str or ""))
+    return ValueError(f"{site}: not authorized to stream this content. {_upper_first(_cookie_hint(cookies_str, site, box))}.")
+
+
+def _no_player_error(html: str, final_url: str, cookies_str: str | None,
+                     site: str, box: str) -> ValueError:
+    """Build an actionable error for a page without player params."""
+    cause = _no_player_cause(html, final_url)
+    logger.warning(
+        "No player params: %s | final_url=%s | bytes=%d | title=%r",
+        cause, final_url, len(html or ""), _page_title(html or ""),
+    )
+    return ValueError(f"{site}: {cause}. {_upper_first(_cookie_hint(cookies_str, site, box))}.")
 
 
 def _get_playlist_url_from_verify(
@@ -426,55 +493,63 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         resp.raise_for_status()
         html = resp.text
         params = _extract_player_params(html)
-        if params and params.get("key") and params.get("sig"):
-            logger.info(
-                "Clip player params: item=%s scene=%s type=%s site=%s key=%s...",
-                params["item_id"], params.get("scene_id"), params.get("type"), params["site"], params["key"][:10],
-            )
-            # clip VOD uses type=scene
-            stream_type = params.get("type") or "scene"
-            # normalize: previewscene -> scene for verify? verify expects scene
-            if stream_type.lower() == "previewscene":
-                stream_type = "scene"
-            result = _get_playlist_url_from_verify(
-                session=session,
-                item_id=params["item_id"],
-                key=params["key"],
-                timestamp=params["timestamp"],
-                sig=params["sig"],
-                site=params["site"],
-                stream_type=stream_type if stream_type in ("scene", "VOD", "preview") else "scene",
-                scene_id=params.get("scene_id") or scene_id,
-            )
-            if result.get("is_authorized") and result.get("playlist_url"):
-                item_detail = result.get("item_detail", {})
-                raw_movie_title = html_unescape(item_detail.get("title") or item_detail.get("vod_title") or "Unknown").strip()
-                cur_scene_id = params.get("scene_id") or scene_id
-                scene_title = ""
-                if cur_scene_id:
-                    for sc in item_detail.get("scenes", []):
-                        if str(sc.get("id")) == str(cur_scene_id):
-                            scene_title = html_unescape(sc.get("title", "")).strip()
-                            break
-                title = resolve_ade_title(raw_movie_title, item_detail, cur_scene_id)
-                dur_s = extract_ade_duration_seconds(item_detail, cur_scene_id, result.get("playlist_url", ""))
-                return {
-                    "title": title,
-                    "movie_title": raw_movie_title,
-                    "scene_title": scene_title,
-                    "item_id": params["item_id"],
-                    "scene_id": cur_scene_id,
-                    "duration_s": dur_s,
-                    "playlist_url": result.get("playlist_url"),
-                    "base_url": result.get("base_url"),
-                    "streams": result.get("streams", []),
-                    "is_authorized": result.get("is_authorized", False),
-                    "item_detail": item_detail,
-                    "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
-                    "screenshots": _extract_ea_screenshots(html) or _synth_screenshots(item_detail, cur_scene_id),
-                }
-        # fallback to preview logic
-        return _get_clip_preview(session, scene_id, url, html)
+        if not params or not params.get("key") or not params.get("sig"):
+            site, box = _site_for_url(resp.url)
+            raise _no_player_error(html, resp.url, cookies_str, site, box)
+        logger.info(
+            "Clip player params: item=%s scene=%s type=%s site=%s key=%s...",
+            params["item_id"], params.get("scene_id"), params.get("type"), params["site"], params["key"][:10],
+        )
+        # clip VOD uses type=scene
+        stream_type = params.get("type") or "scene"
+        # normalize: previewscene -> scene for verify? verify expects scene
+        if stream_type.lower() == "previewscene":
+            stream_type = "scene"
+        result = _get_playlist_url_from_verify(
+            session=session,
+            item_id=params["item_id"],
+            key=params["key"],
+            timestamp=params["timestamp"],
+            sig=params["sig"],
+            site=params["site"],
+            stream_type=stream_type if stream_type in ("scene", "VOD", "preview") else "scene",
+            scene_id=params.get("scene_id") or scene_id,
+        )
+        if result.get("is_authorized") and result.get("playlist_url"):
+            item_detail = result.get("item_detail", {})
+            raw_movie_title = html_unescape(item_detail.get("title") or item_detail.get("vod_title") or "Unknown").strip()
+            cur_scene_id = params.get("scene_id") or scene_id
+            scene_title = ""
+            if cur_scene_id:
+                for sc in item_detail.get("scenes", []):
+                    if str(sc.get("id")) == str(cur_scene_id):
+                        scene_title = html_unescape(sc.get("title", "")).strip()
+                        break
+            title = resolve_ade_title(raw_movie_title, item_detail, cur_scene_id)
+            dur_s = extract_ade_duration_seconds(item_detail, cur_scene_id, result.get("playlist_url", ""))
+            return {
+                "title": title,
+                "movie_title": raw_movie_title,
+                "scene_title": scene_title,
+                "item_id": params["item_id"],
+                "scene_id": cur_scene_id,
+                "duration_s": dur_s,
+                "playlist_url": result.get("playlist_url"),
+                "base_url": result.get("base_url"),
+                "streams": result.get("streams", []),
+                "is_authorized": result.get("is_authorized", False),
+                "item_detail": item_detail,
+                "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
+                "screenshots": _extract_ea_screenshots(html) or _synth_screenshots(item_detail, cur_scene_id),
+            }
+        # Not authorized for the VOD — the free preview may still be available.
+        # If that fails too, explain the authorization problem instead of a
+        # cryptic "could not find movie ID".
+        try:
+            return _get_clip_preview(session, scene_id, url, html)
+        except Exception as preview_err:
+            logger.warning("Preview fallback failed: %s", preview_err)
+            raise _auth_error(cookies_str, url) from preview_err
 
     # Elegant Angel movie pages (...-streaming-porn-videos.html):
     # player params are embedded directly in the page (no viewpart URL like ADE).
@@ -485,10 +560,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         html = resp.text
         params = _extract_player_params(html)
         if not params:
-            raise ValueError(
-                "Could not extract player parameters from the page. "
-                "Ensure cookies contain a valid login session (etoken)."
-            )
+            raise _no_player_error(html, resp.url, cookies_str, "Elegant Angel", "ea")
         logger.info(
             "EA movie player params: item_id=%s, site=%s, key=%s...",
             params["item_id"], params["site"], params["key"][:10],
@@ -504,10 +576,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
             scene_id=params.get("scene_id") or None,
         )
         if not result.get("is_authorized"):
-            raise ValueError(
-                "Not authorized to stream this content. "
-                "Check your cookies - etoken may be expired."
-            )
+            raise _auth_error(cookies_str, resp.url)
         item_detail = result.get("item_detail", {})
         raw_movie_title = html_unescape(item_detail.get("title") or item_detail.get("vod_title") or "Unknown").strip()
         title = resolve_ade_title(raw_movie_title, item_detail, None)
@@ -544,10 +613,22 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
     # Extract player params
     params = _extract_player_params(html)
     if not params:
-        raise ValueError(
-            "Could not extract player parameters from the page. "
-            "Ensure ADE_COOKIES contains valid login cookies (etoken)."
-        )
+        # Some pages (Elegant Angel, certain ADE layouts) only embed the player
+        # in the document itself — retry the plain URL before giving up.
+        logger.info("No player params in viewpart page (%d bytes), retrying plain page", len(html))
+        try:
+            plain = session.get(url)
+            plain.raise_for_status()
+            plain_params = _extract_player_params(plain.text)
+            if plain_params:
+                params, resp, html = plain_params, plain, plain.text
+                logger.info("Plain page had the player params — using them")
+        except Exception as e:
+            logger.warning("Plain-page retry failed: %s", e)
+
+    if not params:
+        site, box = _site_for_url(resp.url)
+        raise _no_player_error(html, resp.url, cookies_str, site, box)
 
     logger.info(
         "Player params: item_id=%s, site=%s, key=%s...",
@@ -568,10 +649,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
     )
 
     if not result.get("is_authorized"):
-        raise ValueError(
-            "Not authorized to stream this content. "
-            "Check your ADE_COOKIES - etoken may be expired."
-        )
+        raise _auth_error(cookies_str, resp.url)
 
     # Extract title and duration
     item_detail = result.get("item_detail", {})
