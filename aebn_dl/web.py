@@ -334,6 +334,27 @@ def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
         pass
 
     covers = [c for c in (item_detail.get("front_cover"), item_detail.get("back_cover"), item_detail.get("poster")) if c]
+    ade_scenes = result.get("scenes") or []
+    # Fallback: normalize raw verify scenes if the scraper ever returns item_detail only.
+    if not ade_scenes:
+        for i, sc in enumerate(item_detail.get("scenes", []) or []):
+            try:
+                ss, es = int(sc.get("start_seconds") or 0), int(sc.get("end_seconds") or 0)
+            except (TypeError, ValueError):
+                ss, es = 0, 0
+            ade_scenes.append({
+                "n": i + 1,
+                "id": str(sc.get("id") or ""),
+                "title": html_unescape(str(sc.get("title") or "")).strip(),
+                "performers": sc.get("performers") or [],
+                "start_s": ss,
+                "end_s": es,
+            })
+    info_scenes = [
+        {"n": s.get("n", i + 1), "performers": s.get("performers") or [], "title": s.get("title", ""),
+         "start_s": s.get("start_s"), "end_s": s.get("end_s")}
+        for i, s in enumerate(ade_scenes)
+    ]
     return {
         "site": site,
         "studio": html_unescape((item_detail.get("studio") or {}).get("name", "") if isinstance(item_detail.get("studio"), dict) else "Unknown"),
@@ -349,6 +370,11 @@ def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
         "preferred_links": [{"height": h, "url": u} for h, u in preferred],
         "covers": covers,
         "screenshots": result.get("screenshots", []),
+        "screenshot_groups": result.get("screenshot_groups", []),
+        "caps_probe": result.get("caps_probe"),
+        "scenes": info_scenes,
+        "scene_count": len(info_scenes) or None,
+        "performers": [],
         "is_authorized": result.get("is_authorized", False),
         "ppm_remaining": result.get("ppm_time_remaining", result.get("ppm_remaining", 0)),
     }

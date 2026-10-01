@@ -65,6 +65,13 @@ _EA_THUMB_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Broad fallback: any caps CDN still (ADE movie pages use other widths/prefixes,
+# e.g. /m/ galleries or 640/768 thumbs). We normalize everything to 1280c/3840.
+_ANY_CAPS_RE = re.compile(
+    r"https://caps\d?cdn\.adultempire\.com/([a-z])/(\d+)/(\d+)/(\d+)_(\d+)_\d+[a-z]?\.jpg",
+    re.IGNORECASE,
+)
+
 # Extract player init params from HTML — handles both item/item_id and scene/scene_id
 _PLAYER_INIT_RE = re.compile(
     r"AEVideoPlayer\([^)]*\{[^}]*"
@@ -388,26 +395,188 @@ def resolve_ade_title(    base_title: str,
     return base_title
 
 
-def _extract_ea_screenshots(html: str) -> list[dict[str, str]]:
-    """Extract scene screenshot (thumb, full) pairs from an Elegant Angel page.
+def _extract_ea_screenshots(html: str, master: str | int | None = None) -> list[dict[str, str]]:
+    """Extract caps stills, optionally filtered to one master id.
 
-    Thumbs (width 10/320) dedupe to one entry per frame; full-size URL is the
-    1280c variant, e.g. .../n/0399/1280/5090399_06670_1280c.jpg
+    Unfiltered clip pages also carry related-title thumbs (other masters) —
+    pass the verify ``master_id`` to keep only the scene's own stills.
     """
-    seen: set[tuple[str, str]] = set()
+    want = str(master) if master not in (None, "") else ""
+    seen: set[tuple[str, ...]] = set()
     shots: list[dict[str, str]] = []
-    for m in _EA_THUMB_RE.finditer(html):
+    for m in _EA_THUMB_RE.finditer(html or ""):
         host = m.group(0).split("/n/")[0]
-        gallery, master, offset = m.group(1), m.group(3), m.group(4)
-        key = (master, offset)
+        gallery, mst, offset = m.group(1), m.group(3), m.group(4)
+        if want and mst != want:
+            continue
+        key = (mst, offset)
         if key in seen:
             continue
         seen.add(key)
         shots.append({
-            "thumb": f"{host}/n/{gallery}/1280/{master}_{offset}_1280c.jpg",
-            "full": f"{host}/n/{gallery}/3840/{master}_{offset}_3840.jpg",
+            "thumb": f"{host}/n/{gallery}/1280/{mst}_{offset}_1280c.jpg",
+            "full": f"{host}/n/{gallery}/3840/{mst}_{offset}_3840.jpg",
+        })
+    # Broad pass too (don't early-return): ADE movie pages mix widths/prefixes.
+    for m in _ANY_CAPS_RE.finditer(html or ""):
+        prefix, gallery, _width, mst, offset = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+        if want and mst != want:
+            continue
+        key = (mst, offset)
+        if key in seen:
+            continue
+        seen.add(key)
+        host = m.group(0).split(f"/{prefix}/")[0]
+        shots.append({
+            "thumb": f"{host}/{prefix}/{gallery}/1280/{mst}_{offset}_1280c.jpg",
+            "full": f"{host}/{prefix}/{gallery}/3840/{mst}_{offset}_3840.jpg",
         })
     return shots
+
+
+def _merge_shots(*lists: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Dedupe screenshot lists (by full URL) preserving order."""
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    for lst in lists:
+        for s in lst or []:
+            key = s.get("full") or s.get("thumb") or ""
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
+    return out
+
+
+def _dedupe_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop cross-group duplicate stills (by full URL), keeping first occurrence.
+
+    Covers preview-8 vs More-Screenshots full sets, 320 vs 3840 variants
+    (already normalized), and synth overview vs per-scene synth.
+    """
+    seen: set[str] = set()
+    for g in groups:
+        uniq: list[dict[str, str]] = []
+        for s in g.get("screenshots") or []:
+            key = s.get("full") or s.get("thumb") or ""
+            if key and key not in seen:
+                seen.add(key)
+                uniq.append(s)
+        g["screenshots"] = uniq
+    return groups
+
+
+def _extract_more_screens_params(html: str) -> list[dict[str, int]]:
+    """Parse ShowMoreScreens2017(item, start, end, sceneID, ...) call params.
+
+    The movie page only embeds ~8 preview stills per scene; the full set
+    (70-100 per scene on Mon Amour) loads via More Screenshots buttons through
+    GET /Item/LoadSceneScreenshots?item=&start=&end=&sceneID=.
+    """
+    out: list[dict[str, int]] = []
+    for m in re.finditer(r"ShowMoreScreens2017\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", html or ""):
+        try:
+            out.append({"item": int(m.group(1)), "start": int(m.group(2)),
+                        "end": int(m.group(3)), "scene": int(m.group(4))})
+        except ValueError:
+            continue
+    # Dedupe by scene, keep order
+    seen: set[int] = set()
+    uniq: list[dict[str, int]] = []
+    for p in out:
+        if p["scene"] not in seen:
+            seen.add(p["scene"])
+            uniq.append(p)
+    return uniq
+
+
+def _fetch_full_scene_shots(session: CustomSession, base_host: str,
+                            params: list[dict[str, int]]) -> dict[str, list[dict[str, str]]]:
+    """Call /Item/LoadSceneScreenshots per scene; return {sceneID: shots}."""
+    out: dict[str, list[dict[str, str]]] = {}
+    for p in params:
+        try:
+            r = session.get(f"{base_host}/Item/LoadSceneScreenshots",
+                            params={"item": p["item"], "start": p["start"],
+                                    "end": p["end"], "sceneID": p["scene"]},
+                            timeout=20)
+            if r.ok and r.text:
+                shots = _extract_ea_screenshots(r.text)
+                if shots:
+                    out[str(p["scene"])] = shots
+                    logger.info("Full stills scene %s: %d", p["scene"], len(shots))
+        except Exception as e:
+            logger.warning("LoadSceneScreenshots failed scene %s: %s", p["scene"], e)
+    return out
+
+
+def _extract_movie_page_blocks(html: str) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """Split an ADE movie page into full-list stills + per-scene blocks.
+
+    Movie pages (e.g. /4997491/mon-amour-...-porn-videos.html) render
+    ``<a name=\"scene_<clipId>\">`` anchors, one block per scene, each with
+    its own stills and an ``/clip/<id>/<slug>-streaming-scene.html`` title
+    link. The top chunk (before the first anchor) is the full-movie list —
+    on Mon Amour that's 1 still vs 8 per scene, i.e. scenes carry more
+    screenshots than the full list.
+    Returns (full_shots, [{clip_id, title, shots}]).
+    """
+    parts = re.split(r'<a name="scene_(\d+)"', html or "")
+    full_shots = _extract_ea_screenshots(parts[0]) if parts else []
+    blocks: list[dict[str, Any]] = []
+    for i in range(1, len(parts), 2):
+        clip_id = parts[i]
+        block = parts[i + 1] if i + 1 < len(parts) else ""
+        title_m = re.search(
+            r"/clip/" + re.escape(clip_id) + r"/[^\"]*?\"[^>]*>(.*?)</a>",
+            block, re.S | re.I,
+        )
+        title = re.sub(r"\s+", " ", html_unescape(title_m.group(1)) if title_m else "").strip()
+        blocks.append({
+            "clip_id": clip_id,
+            "title": title or f"Scene {len(blocks) + 1}",
+            "shots": _extract_ea_screenshots(block),
+        })
+    return full_shots, blocks
+
+
+def _build_groups_from_page_blocks(
+    item_detail: dict[str, Any],
+    full_shots: list[dict[str, str]],
+    blocks: list[dict[str, Any]],
+    combined_limit: int = 40,
+) -> list[dict[str, Any]] | None:
+    """Build screenshot groups from real movie-page scene blocks.
+
+    Returns None when the page has no scene blocks (caller falls back to
+    offset bucketing / synth). Verify scene boundaries are attached by order
+    (block n ↔ verify scene n) so the UI can show time ranges.
+    """
+    if not blocks:
+        return None
+    scenes = _scenes_info(item_detail)
+    total_end = max((s["end_s"] for s in scenes), default=0)
+    combined = list(full_shots) or _synth_screenshots(item_detail, None, limit=combined_limit)
+    groups: list[dict[str, Any]] = [{
+        "key": "all",
+        "scene_id": None,
+        "n": 0,
+        "title": "Full movie (combined)",
+        "start_s": 0,
+        "end_s": total_end,
+        "screenshots": combined,
+    }]
+    for i, b in enumerate(blocks):
+        sc = scenes[i] if i < len(scenes) else {}
+        groups.append({
+            "key": f"scene-{i + 1}",
+            "scene_id": sc.get("id") or b.get("clip_id"),
+            "n": i + 1,
+            "title": b.get("title") or sc.get("title") or f"Scene {i + 1}",
+            "start_s": sc.get("start_s"),
+            "end_s": sc.get("end_s"),
+            "screenshots": b.get("shots") or [],
+        })
+    return groups
 
 
 def _synth_screenshots(item_detail: dict[str, Any], scene_id: str | int | None = None, limit: int = 40) -> list[dict[str, str]]:
@@ -438,7 +607,7 @@ def _synth_screenshots(item_detail: dict[str, Any], scene_id: str | int | None =
         return []
 
     duration = end - start
-    step = max(interval, round(duration / 30 / interval) * interval or interval)
+    step = max(interval, round(duration / limit / interval) * interval or interval)
     gallery = master[-4:]
     shots: list[dict[str, str]] = []
     offset = (start // step) * step
@@ -450,6 +619,141 @@ def _synth_screenshots(item_detail: dict[str, Any], scene_id: str | int | None =
         })
         offset += step
     return shots
+
+
+def _scenes_info(item_detail: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize verify `scenes` into UI-friendly metadata."""
+    out: list[dict[str, Any]] = []
+    for i, sc in enumerate(item_detail.get("scenes", []) or []):
+        try:
+            start_s = int(sc.get("start_seconds") or 0)
+        except (TypeError, ValueError):
+            start_s = 0
+        try:
+            end_s = int(sc.get("end_seconds") or 0)
+        except (TypeError, ValueError):
+            end_s = 0
+        title = html_unescape(str(sc.get("title") or "")).strip()
+        out.append({
+            "n": i + 1,
+            "id": str(sc.get("id") or ""),
+            "title": title,
+            "performers": sc.get("performers") or sc.get("stars") or [],
+            "start_s": start_s,
+            "end_s": end_s,
+        })
+    return out
+
+
+def _shot_offset_seconds(shot: dict[str, str]) -> int | None:
+    """Parse the frame offset (seconds) out of a caps CDN URL."""
+    m = re.search(r"_(\d{4,6})_(?:10|320|1280c|3840)\.jpg", (shot.get("full") or "") + " " + (shot.get("thumb") or ""))
+    if not m:
+        m = re.search(r"_(\d+)_", shot.get("full") or shot.get("thumb") or "")
+    try:
+        return int(m.group(1)) if m else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _caps_probe_info(shots: list[dict[str, str]], start: int = 0,
+                     end: int | None = None, step: int = 10) -> dict[str, Any] | None:
+    """Describe the full caps range behind a movie (for the UI opt-in toggle).
+
+    Parses prefix/gallery/master from the first real still and spans
+    start..end at step 10 — the same range ``check_caps_limit.py`` probes
+    (Mon Amour: 0..9203 → 921 stills). The frontend generates the URLs only
+    when the toggle is switched on (default off), so no extra traffic.
+    """
+    master = gallery = prefix = ""
+    for s in shots or []:
+        m = re.search(r"/([a-z])/(\d+)/\d+/(\d+)_\d+_\d+[a-z]?\.jpg",
+                      s.get("full") or s.get("thumb") or "")
+        if m:
+            prefix, gallery, master = m.group(1), m.group(2), m.group(3)
+            break
+    if not master:
+        return None
+    if end is None:
+        offs = [o for o in (_shot_offset_seconds(s) for s in shots) if o is not None]
+        end = max(offs) if offs else 0
+    if end <= start:
+        return None
+    return {"prefix": prefix, "gallery": gallery, "master": master,
+            "start": start, "end": end, "step": step,
+            "count": (end - start) // step + 1}
+
+
+def _build_screenshot_groups(
+    item_detail: dict[str, Any],
+    html_shots: list[dict[str, str]] | None = None,
+    per_scene_limit: int = 30,
+    combined_limit: int = 40,
+) -> list[dict[str, Any]]:
+    """Group screenshots per scene + a combined (full-movie) group.
+
+    Movie pages (e.g. /4997491/mon-amour-...-porn-videos.html) list one
+    combined player on top plus one entry per scene. The flat `screenshots`
+    list mixes them, so the UI needs explicit groups:
+    ``all`` (combined) first, then Scene 1..N with title + boundaries.
+    """
+    scenes = _scenes_info(item_detail)
+    if not scenes:
+        return []
+    html_shots = html_shots or []
+
+    # Bucket HTML thumbs by scene boundaries (offset seconds within [start, end]).
+    buckets: dict[str, list[dict[str, str]]] = {s["id"]: [] for s in scenes if s["id"]}
+    leftover: list[dict[str, str]] = []
+    for shot in html_shots:
+        off = _shot_offset_seconds(shot)
+        placed = False
+        if off is not None:
+            for s in scenes:
+                if s["start_s"] <= off <= s["end_s"]:
+                    if s["id"]:
+                        buckets[s["id"]].append(shot)
+                    placed = True
+                    break
+        if not placed:
+            leftover.append(shot)
+
+    groups: list[dict[str, Any]] = []
+    # Combined group first (the top player on movie pages).
+    # NOTE: when the page carries real stills, those belong to the individual
+    # scenes (bucketed below). The combined entry is a synth overview so the
+    # scene counts add up to the site's total (e.g. 4x30=120) instead of
+    # showing every still twice.
+    total_end = max((s["end_s"] for s in scenes), default=0)
+    combined = _synth_screenshots(item_detail, None, limit=combined_limit)
+    if not combined and html_shots:
+        combined = list(html_shots)
+    groups.append({
+        "key": "all",
+        "scene_id": None,
+        "n": 0,
+        "title": "Full movie (combined)",
+        "start_s": 0,
+        "end_s": total_end,
+        "screenshots": combined,
+    })
+    for s in scenes:
+        sid = s["id"]
+        bucketed = buckets.get(sid, []) if html_shots else []
+        # Fall back to synthesized caps URLs when the page carries no
+        # stills for this scene (ADE movie pages usually don't).
+        shots = bucketed if bucketed else _synth_screenshots(item_detail, sid, limit=per_scene_limit)
+        # Any unbucketable thumbs belong to the combined cut — already shown.
+        groups.append({
+            "key": f"scene-{s['n']}",
+            "scene_id": sid,
+            "n": s["n"],
+            "title": s["title"] or f"Scene {s['n']}",
+            "start_s": s["start_s"],
+            "end_s": s["end_s"],
+            "screenshots": shots,
+        })
+    return groups
 
 
 def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]:
@@ -527,6 +831,60 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                         break
             title = resolve_ade_title(raw_movie_title, item_detail, cur_scene_id)
             dur_s = extract_ade_duration_seconds(item_detail, cur_scene_id, result.get("playlist_url", ""))
+            master_id = str(item_detail.get("master_id") or "")
+            real_shots = _extract_ea_screenshots(html, master_id or None)
+            flat_shots = real_shots or _extract_ea_screenshots(html) or _synth_screenshots(item_detail, cur_scene_id)
+            scene_groups = _build_screenshot_groups(item_detail, _extract_ea_screenshots(html) or None)
+            caps_probe = None
+            # Parent-movie flow: the clip page's own stills mix in related
+            # titles, so resolve the parent movie page (clip → movie link),
+            # find this exact scene block (preview stills) plus its More
+            # Screenshots full set.
+            try:
+                pm = re.search(r'href="(/(\d+)/([^"]+?)-porn-videos\.html)"', html or "")
+                if pm and cur_scene_id:
+                    u = urlparse(url)
+                    movie_url = f"{u.scheme or 'https'}://{u.netloc or 'www.adultdvdempire.com'}{pm.group(1)}"
+                    logger.info("Clip parent movie page: %s", movie_url)
+                    mresp = session.get(movie_url, timeout=20)
+                    if mresp.ok and mresp.text:
+                        _mfull, mblocks = _extract_movie_page_blocks(mresp.text)
+                        blk = next((b for b in mblocks
+                                    if str(b.get("clip_id")) == str(cur_scene_id)), None)
+                        if blk and (blk.get("shots") or _extract_more_screens_params(mresp.text)):
+                            more2 = [p for p in _extract_more_screens_params(mresp.text)
+                                     if str(p["scene"]) == str(cur_scene_id)]
+                            if more2:
+                                mu = urlparse(movie_url)
+                                mhost = f"{mu.scheme or 'https'}://{mu.netloc}"
+                                fmap = _fetch_full_scene_shots(session, mhost, more2)
+                                if str(cur_scene_id) in fmap:
+                                    blk["shots"] = _merge_shots(fmap[str(cur_scene_id)],
+                                                                blk.get("shots"))
+                            scene_shots = _merge_shots(blk.get("shots"))
+                            if scene_shots:
+                                flat_shots = _merge_shots(scene_shots, flat_shots)
+                                infos = _scenes_info(item_detail)
+                                info = next((s for s in infos
+                                             if s.get("id") == str(cur_scene_id)), {})
+                                if more2:
+                                    caps_probe = _caps_probe_info(
+                                        scene_shots, start=more2[0]["start"],
+                                        end=more2[0]["end"], step=10)
+                                scene_groups = _dedupe_groups([{
+                                    "key": f"scene-{info.get('n') or 1}",
+                                    "scene_id": str(cur_scene_id),
+                                    "n": info.get("n") or 1,
+                                    "title": blk.get("title") or info.get("title")
+                                             or scene_title or f"Scene {cur_scene_id}",
+                                    "start_s": info.get("start_s"),
+                                    "end_s": info.get("end_s"),
+                                    "screenshots": scene_shots,
+                                }])
+                                logger.info("Parent-movie exact scene %s: %d stills",
+                                            cur_scene_id, len(scene_shots))
+            except Exception as e:
+                logger.warning("Parent-movie scene stills failed: %s", e)
             return {
                 "title": title,
                 "movie_title": raw_movie_title,
@@ -540,7 +898,10 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                 "is_authorized": result.get("is_authorized", False),
                 "item_detail": item_detail,
                 "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
-                "screenshots": _extract_ea_screenshots(html) or _synth_screenshots(item_detail, cur_scene_id),
+                "screenshots": flat_shots,
+                "screenshot_groups": scene_groups,
+                "caps_probe": caps_probe,
+                "scenes": _scenes_info(item_detail),
             }
         # Not authorized for the VOD — the free preview may still be available.
         # If that fails too, explain the authorization problem instead of a
@@ -595,6 +956,8 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
             "item_detail": item_detail,
             "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
             "screenshots": _synth_screenshots(item_detail, None),
+            "screenshot_groups": _build_screenshot_groups(item_detail, None),
+            "scenes": _scenes_info(item_detail),
         }
 
     # Movie/VOD pages: get full VOD stream
@@ -663,6 +1026,49 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
     title = resolve_ade_title(raw_movie_title, item_detail, scene_id)
     dur_s = extract_ade_duration_seconds(item_detail, scene_id, result.get("playlist_url", ""))
 
+    # Screenshots: the viewpart page (player) rarely carries stills — the real
+    # scene thumbs live on the normal movie page. Fetch it best-effort and
+    # merge, so we show the site's actual stills instead of only synth guesses.
+    # The movie page itself splits stills per scene (<a name="scene_<id>">
+    # blocks, 8 each on Mon Amour vs 1 on the full list), so prefer those
+    # exact blocks over offset bucketing.
+    ea_shots = _extract_ea_screenshots(html)
+    page_full: list[dict[str, str]] = []
+    page_blocks: list[dict[str, Any]] = []
+    more_params: list[dict[str, int]] = []
+    try:
+        plain_resp = session.get(url, timeout=20)
+        if plain_resp.ok and plain_resp.text and plain_resp.text != html:
+            ea_shots = _merge_shots(ea_shots, _extract_ea_screenshots(plain_resp.text))
+            page_full, page_blocks = _extract_movie_page_blocks(plain_resp.text)
+            ea_shots = _merge_shots(ea_shots, page_full,
+                                    *[b.get("shots") or [] for b in page_blocks])
+            # More Screenshots buttons: each scene block previews ~8 stills,
+            # the full set (70-100/scene) loads via /Item/LoadSceneScreenshots.
+            more_params = _extract_more_screens_params(plain_resp.text)
+            if more_params and page_blocks:
+                u = urlparse(url)
+                host = f"{u.scheme or 'https'}://{u.netloc or 'www.adultdvdempire.com'}"
+                full_map = _fetch_full_scene_shots(session, host, more_params)
+                if full_map:
+                    by_clip = {str(b.get("clip_id")): b for b in page_blocks}
+                    for sid, shots in full_map.items():
+                        if sid in by_clip:
+                            by_clip[sid]["shots"] = _merge_shots(shots, by_clip[sid].get("shots"))
+                        else:
+                            page_blocks.append({"clip_id": sid, "title": f"Scene {sid}", "shots": shots})
+                    ea_shots = _merge_shots(ea_shots, *[s for s in full_map.values()])
+    except Exception as e:
+        logger.warning("Plain-page stills fetch failed: %s", e)
+    logger.info("Stills: viewpart+page=%d real, scenes=%d, page-blocks=%d", len(ea_shots), len(item_detail.get("scenes", []) or []), len(page_blocks))
+    flat_shots = _merge_shots(ea_shots, page_full, *[b.get("shots") or [] for b in page_blocks]) or _synth_screenshots(item_detail, scene_id)
+    probe_end = max([p["end"] for p in more_params], default=0) or None
+    caps_probe = _caps_probe_info(ea_shots, start=0, end=probe_end, step=10)
+    groups = _dedupe_groups(
+        _build_groups_from_page_blocks(item_detail, page_full, page_blocks)
+        or _build_screenshot_groups(item_detail, ea_shots or None)
+        or []
+    )
     return {
         "title": title,
         "movie_title": raw_movie_title,
@@ -676,7 +1082,10 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         "is_authorized": result.get("is_authorized", False),
         "item_detail": item_detail,
         "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
-        "screenshots": _extract_ea_screenshots(html) or _synth_screenshots(item_detail, scene_id),
+        "screenshots": flat_shots,
+        "screenshot_groups": groups,
+        "caps_probe": caps_probe,
+        "scenes": _scenes_info(item_detail),
     }
 
 

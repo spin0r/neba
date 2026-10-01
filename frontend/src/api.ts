@@ -13,8 +13,29 @@ export interface Screenshot {
 export interface SceneInfo {
   n: number;
   performers: string[];
+  title?: string;
   start_s?: number | null;
   end_s?: number | null;
+}
+
+export interface ScreenshotGroup {
+  key: string;
+  scene_id?: string | number | null;
+  n: number;
+  title: string;
+  start_s?: number | null;
+  end_s?: number | null;
+  screenshots: Screenshot[];
+}
+
+export interface CapsProbe {
+  prefix: string;
+  gallery: string;
+  master: string;
+  start: number;
+  end: number;
+  step: number;
+  count: number;
 }
 
 export interface ExtractData {
@@ -33,6 +54,8 @@ export interface ExtractData {
   preferred_links?: VariantLink[];
   covers?: string[];
   screenshots?: Screenshot[];
+  screenshot_groups?: ScreenshotGroup[];
+  caps_probe?: CapsProbe | null;
   performers?: string[];
   scene_count?: number;
   scenes?: SceneInfo[];
