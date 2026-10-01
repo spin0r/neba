@@ -46,6 +46,45 @@ window.addEventListener('hashchange', () => {
   showPage(location.hash === '#/cookies' ? 'cookies' : 'extract');
 });
 
+// ── Global paste: intercept clipboard pastes anywhere on the page ──
+// If the pasted text contains a recognisable URL, auto-fill the input and start
+// extraction immediately — no need to click the input first.
+const SUPPORTED_URL_RE =
+  /https?:\/\/[^\s]*(?:aebn\.com|m\.aebn\.net|adultdvdempire\.com|adultempire\.com|elegantangel\.com)[^\s]*/i;
+
+document.addEventListener('paste', (e: ClipboardEvent) => {
+  // Don't intercept pastes inside password fields or textareas
+  const target = e.target as HTMLElement;
+  if (
+    target.tagName === 'TEXTAREA' ||
+    (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'password')
+  )
+    return;
+  // Ignore if a modal is open
+  if (document.querySelector('.modal-overlay')) return;
+  // Ignore if we're already on the cookies page
+  if (page !== 'extract') return;
+
+  const text = e.clipboardData?.getData('text') || '';
+  const m = SUPPORTED_URL_RE.exec(text);
+  if (!m) return;
+
+  // Prevent the default paste into whatever was focused
+  e.preventDefault();
+
+  const url = m[0].replace(/[)\]}>'"]+$/, ''); // strip trailing punctuation
+  const input = $('urlInput') as HTMLInputElement;
+  input.value = url;
+
+  // Visual flash to show the URL was captured
+  input.classList.add('paste-flash');
+  setTimeout(() => input.classList.remove('paste-flash'), 600);
+
+  if (authed) {
+    void fetchExtract();
+  }
+});
+
 // ── Global keyboard: ↑/↓ navigate rows, Enter activates/copies ──
 function resultsVisible(): boolean {
   return $('resultBody').classList.contains('visible') && $('resultBody').innerHTML !== '';

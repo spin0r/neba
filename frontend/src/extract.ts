@@ -14,6 +14,7 @@ interface HistEntry {
 }
 
 const HIST_KEY = 'ae_hist';
+const HIST_MAX = 50;          // keep up to 50 entries (was 20)
 const LEGACY_COOKIES = 'ae_cookies';
 const ADE_COOKIES = 'ae_cookies_ade';
 const EA_COOKIES = 'ae_cookies_ea';
@@ -45,8 +46,20 @@ function getHist(): HistEntry[] {
 function pushHist(url: string, title: string): void {
   const h = getHist().filter((x) => x.url !== url);
   h.unshift({ url, title: title || '', t: Date.now() });
-  localStorage.setItem(HIST_KEY, JSON.stringify(h.slice(0, 20)));
+  localStorage.setItem(HIST_KEY, JSON.stringify(h.slice(0, HIST_MAX)));
   renderHist();
+}
+
+function fmtAge(t: number): string {
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 export function renderHist(): void {
@@ -56,8 +69,11 @@ export function renderHist(): void {
         .map(
           (x, i) => `
       <div class="hist-item" data-i="${i}">
+        <div class="hist-item-main">
+          <span class="hist-title-text">${esc(x.title || x.url)}</span>
+          <span class="hist-age">${fmtAge(x.t)}</span>
+        </div>
         <span class="hist-url">${esc(x.url)}</span>
-        <span class="hist-meta">${esc(x.title || '')}</span>
       </div>`,
         )
         .join('')
@@ -162,6 +178,49 @@ function qualityLabel(height: number): string {
   return 'SD';
 }
 
+function fmtClock(s?: number | null): string {
+  if (s === null || s === undefined) return '';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+let probeOn = false;
+let probeKey = '';
+
+function genProbeShots(
+  p: NonNullable<ExtractData['caps_probe']>,
+  exclude?: Set<string>,
+): { thumb: string; full: string }[] {
+  const shots = [];
+  for (let off = p.start; off <= p.end; off += p.step) {
+    const tag = String(off).padStart(5, '0');
+    const full = `https://caps1cdn.adultempire.com/${p.prefix}/${p.gallery}/3840/${p.master}_${tag}_3840.jpg`;
+    if (exclude && exclude.has(full)) continue;
+    shots.push({
+      thumb: `https://caps1cdn.adultempire.com/${p.prefix}/${p.gallery}/1280/${p.master}_${tag}_1280c.jpg`,
+      full,
+    });
+  }
+  return shots;
+}
+
+function buildProbeGroup(p: NonNullable<ExtractData['caps_probe']>): ExtractData['screenshot_groups'] {
+  const shots = genProbeShots(p);
+  return [
+    {
+      key: 'probe',
+      scene_id: null,
+      n: -1,
+      title: `All caps (${p.start}–${p.end}, every ${p.step}s)`,
+      start_s: p.start,
+      end_s: p.end,
+      screenshots: shots,
+    },
+  ];
+}
+
 const COPY_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 
 function renderManifest(d: ExtractData): void {
@@ -246,13 +305,20 @@ function renderManifest(d: ExtractData): void {
 function renderInfo(d: ExtractData): void {
   const { site, t } = headerLabel(d);
   const perf = (d.performers || []).join(', ');
+  const fmtT = (s?: number | null): string => {
+    if (s === null || s === undefined) return '';
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = Math.floor(s % 60);
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+  };
   const scenes = (d.scenes || [])
-    .map(
-      (s) =>
-        `<div class="kv-row"><span class="kv-k">Scene ${s.n}</span><span class="kv-v">${esc(
-          (s.performers || []).join(', ') || '—',
-        )}</span></div>`,
-    )
+    .map((s) => {
+      const bits = [(s.performers || []).join(', ') || '—'];
+      if (s.title) bits[0] = `${esc(s.title)} — ${bits[0]}`;
+      const range = s.start_s != null && s.end_s != null ? ` <span class="kv-range">${fmtT(s.start_s)}–${fmtT(s.end_s)}</span>` : '';
+      return `<div class="kv-row"><span class="kv-k">Scene ${s.n}</span><span class="kv-v">${bits[0]}${range}</span></div>`;
+    })
     .join('');
   resultBody.innerHTML = `
     <div class="section-label">[${esc(site)}] Info</div>
@@ -312,9 +378,87 @@ function renderCovers(d: ExtractData): void {
 }
 
 function renderScreenshots(d: ExtractData): void {
-  const shots = d.screenshots || [];
+  const key = d.source_url || d.manifest_url || '';
+  if (key !== probeKey) {
+    probeKey = key;
+    probeOn = false;
+  }
+  const groups = (d.screenshot_groups || []).filter((g) => (g.screenshots || []).length);
+  // Grouped view: Full movie (combined) on top, then one section per scene.
+  // Covers movie pages like /4997491/mon-amour-...-porn-videos.html where the
+  // top player is the combined cut and scenes 1..N are separate entries.
+  if (groups.length > 1) {
+    if (probeOn && d.caps_probe) groups.push(...(buildProbeGroup(d.caps_probe) || []));
+    const total = groups.reduce((a, g) => a + g.screenshots.length, 0);
+    const flatAll = groups.flatMap((g) => g.screenshots);
+    const probe = d.caps_probe;
+    const sections = groups
+      .map((g) => {
+        const range =
+          g.start_s != null && g.end_s != null && g.n > 0
+            ? ` <span class="shot-range">${fmtClock(g.start_s)}–${fmtClock(g.end_s)}</span>`
+            : '';
+        const label = g.n > 0 ? `Scene ${g.n} — ${esc(g.title)}` : esc(g.title);
+        const imgs = g.screenshots
+          .map(
+            (s, i) =>
+              `<img src="${esc(s.thumb)}" data-full="${esc(s.full)}" data-open="${esc(
+                s.full,
+              )}" data-g="${esc(g.key)}" data-i="${i}" title="Click for full size" loading="lazy" />`,
+          )
+          .join('');
+        return `<div class="section-label shot-group-head">${label} (${g.screenshots.length})${range}
+          <button class="action-pill-btn shot-copy" data-copy-group="${esc(g.key)}">Copy</button>
+        </div><div class="shots">${imgs}</div>`;
+      })
+      .join('');
+    resultBody.innerHTML = `
+    <div class="section-label">Screenshots (${total} · ${groups.length} sections)</div>
+    ${
+      probe
+        ? `<label class="probe-toggle"><span class="probe-label">Include all caps <span class="probe-count">${probe.count}</span></span><input type="checkbox" id="probeToggle" class="switch-input" ${
+            probeOn ? 'checked' : ''
+          } /><span class="switch" aria-hidden="true"><span class="switch-knob"></span></span></label>`
+        : ''
+    }
+    ${sections}
+    <div class="footer"><button class="action-pill-btn" id="btnCopyShots">Copy all URLs</button></div>`;
+    const byKey = new Map(groups.map((g) => [g.key, g]));
+    const pt = document.getElementById('probeToggle') as HTMLInputElement | null;
+    if (pt)
+      pt.onchange = () => {
+        probeOn = pt.checked;
+        renderScreenshots(d);
+      };
+    resultBody.querySelectorAll('.shots img').forEach((img) => {
+      (img as HTMLElement).onclick = () => {
+        const g = byKey.get((img as HTMLElement).dataset.g || '');
+        openViewer(g ? g.screenshots : flatAll, Number((img as HTMLElement).dataset.i));
+      };
+    });
+    resultBody.querySelectorAll('[data-copy-group]').forEach((b) => {
+      (b as HTMLElement).onclick = (e) => {
+        e.stopPropagation();
+        const g = byKey.get((b as HTMLElement).dataset.copyGroup || '');
+        if (g) void copyText(g.screenshots.map((s) => s.full).join('\n'), `Copied ${g.screenshots.length} URLs`);
+      };
+    });
+    const btn = document.getElementById('btnCopyShots');
+    if (btn) btn.onclick = () => void copyText(flatAll.map((s) => s.full).join('\n'), `Copied ${total} URLs`);
+    return;
+  }
+  const base = d.screenshots || [];
+  const probe = d.caps_probe;
+  const shots = probeOn && probe ? [...base, ...genProbeShots(probe, new Set(base.map((s) => s.full)))] : base;
   resultBody.innerHTML = `
     <div class="section-label">Screenshots (${shots.length})</div>
+    ${
+      probe
+        ? `<label class="probe-toggle"><span class="probe-label">Include all caps <span class="probe-count">${probe.count}</span></span><input type="checkbox" id="probeToggle" class="switch-input" ${
+            probeOn ? 'checked' : ''
+          } /><span class="switch" aria-hidden="true"><span class="switch-knob"></span></span></label>`
+        : ''
+    }
     ${
       shots.length
         ? `<div class="shots">${shots
@@ -337,6 +481,12 @@ function renderScreenshots(d: ExtractData): void {
   resultBody.querySelectorAll('.shots img').forEach((img, i) => {
     (img as HTMLElement).onclick = () => openViewer(shots, i);
   });
+  const pt2 = document.getElementById('probeToggle') as HTMLInputElement | null;
+  if (pt2)
+    pt2.onchange = () => {
+      probeOn = pt2.checked;
+      renderScreenshots(d);
+    };
   const btn = document.getElementById('btnCopyShots');
   if (btn)
     btn.onclick = () => void copyText(shots.map((s) => s.full).join('\n'), `Copied ${shots.length} URLs`);
