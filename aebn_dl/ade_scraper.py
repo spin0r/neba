@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 ADE_SITE_API_KEY = "60f039441fff44b4b08c64a3b4a64afe"
 ADE_VERIFY_URL = "https://player.digiflix.video/verify"
 
-# Regex: adultdvdempire.com, adultempire.com or elegantangel.com (same Empire backend) URLs
+# Regex: adultdvdempire.com, adultempire.com, elegantangel.com or dvderotik.com (same Empire backend) URLs
 ADE_URL_RE = re.compile(
-    r"https?://(?:www\.)?(?:adultdvdempire|adultempire|elegantangel)\.com/\S+",
+    r"https?://(?:(?:www\.)?(?:adultdvdempire|adultempire|elegantangel)\.com|(?:(?:[a-z0-9-]+\.)?dvderotik\.com))/\S+",
     re.IGNORECASE,
 )
 
@@ -144,7 +144,7 @@ def _get_session(cookies_str: str | None = None) -> CustomSession:
     )
 
     # Always set age verification cookies
-    for domain in (".adultdvdempire.com", ".adultempire.com", ".elegantangel.com"):
+    for domain in (".adultdvdempire.com", ".adultempire.com", ".elegantangel.com", ".dvderotik.com"):
         session.cookies.set("ageGated", "true", domain=domain, path="/", secure=True)
         session.cookies.set("ageConfirmationClicked", "true", domain=domain, path="/", secure=True)
         session.cookies.set("ageConfirmed", "true", domain=domain, path="/", secure=True)
@@ -167,7 +167,7 @@ def _get_session(cookies_str: str | None = None) -> CustomSession:
     if cookies_str:
         user_cookies = parse_ade_cookies(cookies_str)
         for name, value in user_cookies.items():
-            for domain in (".adultdvdempire.com", ".adultempire.com", ".elegantangel.com"):
+            for domain in (".adultdvdempire.com", ".adultempire.com", ".elegantangel.com", ".dvderotik.com"):
                 session.cookies.set(name, value, domain=domain, path="/")
 
     return session
@@ -265,7 +265,11 @@ def _upper_first(s: str) -> str:
 
 def _site_for_url(url: str) -> tuple[str, str]:
     host = urlparse(url or "").netloc.lower()
-    return ("Elegant Angel", "ea") if "elegantangel" in host else ("AdultDVDEmpire", "ade")
+    if "elegantangel" in host:
+        return ("Elegant Angel", "ea")
+    if "dvderotik" in host:
+        return ("DVDErotik", "dvd")
+    return ("AdultDVDEmpire", "ade")
 
 
 def _auth_error(cookies_str: str | None, final_url: str = "") -> ValueError:
@@ -961,33 +965,42 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         }
 
     # Movie/VOD pages: get full VOD stream
-    # Build the viewpart=videoplayer URL to get the player init params
-    base_url = url.rstrip("/")
-    if "?" in base_url:
-        player_url = base_url + "&viewpart=videoplayer&stream_type=0&tc="
+    # DVDErotik and EA embed player directly in the page; ADE uses viewpart=videoplayer
+    is_dvderotik = "dvderotik" in url.lower()
+    if is_dvderotik:
+        logger.info("Fetching DVDErotik movie page: %s", url)
+        resp = session.get(url)
+        resp.raise_for_status()
+        html = resp.text
+        params = _extract_player_params(html)
     else:
-        player_url = base_url + "?viewpart=videoplayer&stream_type=0&tc="
+        # Build the viewpart=videoplayer URL to get the player init params
+        base_url = url.rstrip("/")
+        if "?" in base_url:
+            player_url = base_url + "&viewpart=videoplayer&stream_type=0&tc="
+        else:
+            player_url = base_url + "?viewpart=videoplayer&stream_type=0&tc="
 
-    logger.info("Fetching player page: %s", player_url)
-    resp = session.get(player_url)
-    resp.raise_for_status()
-    html = resp.text
+        logger.info("Fetching player page: %s", player_url)
+        resp = session.get(player_url)
+        resp.raise_for_status()
+        html = resp.text
 
-    # Extract player params
-    params = _extract_player_params(html)
-    if not params:
-        # Some pages (Elegant Angel, certain ADE layouts) only embed the player
-        # in the document itself — retry the plain URL before giving up.
-        logger.info("No player params in viewpart page (%d bytes), retrying plain page", len(html))
-        try:
-            plain = session.get(url)
-            plain.raise_for_status()
-            plain_params = _extract_player_params(plain.text)
-            if plain_params:
-                params, resp, html = plain_params, plain, plain.text
-                logger.info("Plain page had the player params — using them")
-        except Exception as e:
-            logger.warning("Plain-page retry failed: %s", e)
+        # Extract player params
+        params = _extract_player_params(html)
+        if not params:
+            # Some pages (Elegant Angel, certain ADE layouts) only embed the player
+            # in the document itself — retry the plain URL before giving up.
+            logger.info("No player params in viewpart page (%d bytes), retrying plain page", len(html))
+            try:
+                plain = session.get(url)
+                plain.raise_for_status()
+                plain_params = _extract_player_params(plain.text)
+                if plain_params:
+                    params, resp, html = plain_params, plain, plain.text
+                    logger.info("Plain page had the player params — using them")
+            except Exception as e:
+                logger.warning("Plain-page retry failed: %s", e)
 
     if not params:
         site, box = _site_for_url(resp.url)
@@ -1037,9 +1050,10 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
     page_blocks: list[dict[str, Any]] = []
     more_params: list[dict[str, int]] = []
     try:
-        plain_resp = session.get(url, timeout=20)
-        if plain_resp.ok and plain_resp.text and plain_resp.text != html:
-            ea_shots = _merge_shots(ea_shots, _extract_ea_screenshots(plain_resp.text))
+        plain_resp = resp if is_dvderotik else session.get(url, timeout=20)
+        if plain_resp.ok and plain_resp.text:
+            if not is_dvderotik and plain_resp.text != html:
+                ea_shots = _merge_shots(ea_shots, _extract_ea_screenshots(plain_resp.text))
             page_full, page_blocks = _extract_movie_page_blocks(plain_resp.text)
             ea_shots = _merge_shots(ea_shots, page_full,
                                     *[b.get("shots") or [] for b in page_blocks])
@@ -1110,10 +1124,15 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
     if movie_slug_match:
         parent_vod_id = movie_slug_match.group(1)
         parent_slug = movie_slug_match.group(2)
-        vod_url = f"https://www.adultdvdempire.com/{parent_vod_id}/{parent_slug}-porn-videos.html"
+        u = urlparse(url)
+        host = f"{u.scheme or 'https'}://{u.netloc or 'www.adultdvdempire.com'}"
+        vod_url = f"{host}/{parent_vod_id}/{parent_slug}-porn-videos.html"
 
         # Try to get player params from the VOD page
-        vod_resp = session.get(vod_url + "?viewpart=videoplayer&stream_type=0&tc=")
+        if "dvderotik" in url.lower():
+            vod_resp = session.get(vod_url)
+        else:
+            vod_resp = session.get(vod_url + "?viewpart=videoplayer&stream_type=0&tc=")
         if vod_resp.ok:
             params = _extract_player_params(vod_resp.text)
             if params and params.get("key"):

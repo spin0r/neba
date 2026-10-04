@@ -50,7 +50,7 @@ window.addEventListener('hashchange', () => {
 // If the pasted text contains a recognisable URL, auto-fill the input and start
 // extraction immediately — no need to click the input first.
 const SUPPORTED_URL_RE =
-  /https?:\/\/[^\s]*(?:aebn\.com|m\.aebn\.net|adultdvdempire\.com|adultempire\.com|elegantangel\.com)[^\s]*/i;
+  /https?:\/\/[^\s]*(?:aebn\.com|m\.aebn\.net|adultdvdempire\.com|adultempire\.com|elegantangel\.com|dvderotik\.com)[^\s]*/i;
 
 document.addEventListener('paste', (e: ClipboardEvent) => {
   // Don't intercept pastes inside password fields or textareas

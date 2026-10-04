@@ -143,11 +143,11 @@ def _load_saved_cookies() -> str:
 
 def _load_site_cookies(site: str) -> str:
     """Site session. "ade" falls back to the legacy global key ("0", shared
-    with the Telegram bot); "ea" is strictly separate."""
+    with the Telegram bot); "ea" and "dvd" are strictly separate."""
     data = _load_all_cookies()
     if site == "ade":
         return data.get("ade", "") or data.get("0", "")
-    return data.get("ea", "")
+    return data.get(site, "")
 
 
 def _save_site_cookies(site: str, cookie_text: str) -> None:
@@ -163,7 +163,7 @@ def _save_site_cookies(site: str, cookie_text: str) -> None:
 # ---------------------------------------------------------------------------
 # PlainRaw sync (https://api.plainraw.com/api) — one paste per site.
 # Configure with PLAINRAW_ADE_UUID / PLAINRAW_ADE_KEY
-# (and PLAINRAW_EA_UUID / PLAINRAW_EA_KEY for Elegant Angel).
+# (and PLAINRAW_EA_UUID / PLAINRAW_EA_KEY, PLAINRAW_DVD_UUID / PLAINRAW_DVD_KEY).
 # ---------------------------------------------------------------------------
 PLAINRAW_API = "https://api.plainraw.com/api"
 PLAINRAW_MAX = 30000
@@ -172,7 +172,7 @@ PLAINRAW_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHT
 
 def _plainraw_cfg(site: str) -> tuple[str, str]:
     site = site.lower()
-    if site not in ("ade", "ea"):
+    if site not in ("ade", "ea", "dvd"):
         return "", ""
     return (
         os.getenv(f"PLAINRAW_{site.upper()}_UUID", ""),
@@ -319,7 +319,12 @@ def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
     from .ade_scraper import extract_ade_duration_seconds, get_ade_manifest
 
     result = get_ade_manifest(url, cookies_str=cookies or None)
-    site = "EA" if "elegantangel.com" in url.lower() else "ADE"
+    if "elegantangel.com" in url.lower():
+        site = "EA"
+    elif "dvderotik.com" in url.lower():
+        site = "DVDErotik"
+    else:
+        site = "ADE"
 
     resolutions = sorted({s.get("source_height", 0) for s in result.get("streams", []) if s.get("source_height")})
     item_detail = result.get("item_detail", {})
@@ -406,7 +411,7 @@ def _info_aebn(url: str) -> dict[str, Any]:
     return data
 
 
-def do_extract(url: str, mode: str, cookies_ade: str = "", cookies_ea: str = "", cookies_legacy: str = "") -> dict[str, Any]:
+def do_extract(url: str, mode: str, cookies_ade: str = "", cookies_ea: str = "", cookies_dvd: str = "", cookies_legacy: str = "") -> dict[str, Any]:
     from .ade_scraper import ADE_URL_RE
 
     url = (url or "").strip()
@@ -416,10 +421,20 @@ def do_extract(url: str, mode: str, cookies_ade: str = "", cookies_ea: str = "",
     if m:
         url = m.group(0).rstrip(")")
     host = urlparse(url).netloc.lower()
-    site = "ea" if "elegantangel.com" in host else "ade"
+    if "elegantangel.com" in host:
+        site = "ea"
+    elif "dvderotik.com" in host:
+        site = "dvd"
+    else:
+        site = "ade"
 
-    req_cookies = ((cookies_ea or "") if site == "ea" else (cookies_ade or "")) or (cookies_legacy or "")
-    req_cookies = req_cookies.strip()
+    if site == "ea":
+        req_cookies = cookies_ea or ""
+    elif site == "dvd":
+        req_cookies = cookies_dvd or ""
+    else:
+        req_cookies = cookies_ade or ""
+    req_cookies = (req_cookies or (cookies_legacy or "")).strip()
     effective_cookies = req_cookies or _load_site_cookies(site) or os.getenv("ADE_COOKIES", "")
     cookies_source = f"browser:{site}" if req_cookies else (f"server:{site}" if effective_cookies else "none")
 
@@ -428,7 +443,7 @@ def do_extract(url: str, mode: str, cookies_ade: str = "", cookies_ea: str = "",
     elif "aebn.com" in host or "m.aebn.net" in host:
         data = _info_aebn(url) if mode == "info" else _extract_aebn(url)
     else:
-        raise ValueError("Unsupported URL — paste an AEBN, AdultDVDEmpire or Elegant Angel link")
+        raise ValueError("Unsupported URL — paste an AEBN, AdultDVDEmpire, Elegant Angel, or DVDErotik link")
     data["cookies_source"] = cookies_source
     data["cookie_site"] = site
     data["source_url"] = url
@@ -527,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_auth():
                 return
             out: dict[str, Any] = {}
-            for site in ("ade", "ea"):
+            for site in ("ade", "ea", "dvd"):
                 saved = _load_site_cookies(site)
                 info: dict[str, Any] = {"configured": bool(saved and "etoken" in saved)}
                 if info["configured"]:
@@ -548,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             qs = parse_qs(parsed.query or "")
             sites = qs.get("site", [])
-            targets = [s for s in sites if s in ("ade", "ea")] or ["ade", "ea"]
+            targets = [s for s in sites if s in ("ade", "ea", "dvd")] or ["ade", "ea", "dvd"]
             futs = {s: executor.submit(_plainraw_pull, s) for s in targets}
             self._send_json({s: f.result(timeout=30) for s, f in futs.items()})
             return
@@ -610,6 +625,7 @@ class Handler(BaseHTTPRequestHandler):
                     str(body.get("mode", "manifest")),
                     str(body.get("cookies_ade", "") or ""),
                     str(body.get("cookies_ea", "") or ""),
+                    str(body.get("cookies_dvd", "") or ""),
                     str(body.get("cookies", "") or ""),
                 ).result(timeout=600)
                 self._send_json({"success": True, "data": data})
@@ -621,8 +637,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cookies":
             body = self._read_json()
             site = str(body.get("site", "") or "").lower()
-            if site not in ("ade", "ea"):
-                self._send_json({"success": False, "error": "Missing site — use 'ade' or 'ea'"}, 200)
+            if site not in ("ade", "ea", "dvd"):
+                self._send_json({"success": False, "error": "Missing site — use 'ade', 'ea', or 'dvd'"}, 200)
                 return
             cookie_text = str(body.get("cookies", "") or "")
             if "etoken" not in cookie_text:
@@ -636,8 +652,8 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             site = str(body.get("site", "") or "").lower()
             content = str(body.get("content", "") or "")
-            if site not in ("ade", "ea"):
-                self._send_json({"success": False, "error": "Missing site — use 'ade' or 'ea'"}, 200)
+            if site not in ("ade", "ea", "dvd"):
+                self._send_json({"success": False, "error": "Missing site — use 'ade', 'ea', or 'dvd'"}, 200)
                 return
             if "etoken" not in content:
                 self._send_json({"success": False, "error": "No etoken found — refusing to push"}, 200)

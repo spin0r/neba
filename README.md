@@ -99,7 +99,7 @@ python -m aebn_dl.bot
 | `/dl <url> [720] [scene:2] [--covers] [--split-scenes]` | Optional full download (kept for completeness) |
 | Paste URL directly | Auto-returns **m3u8/DASH URL** (no download) |
 
-Works with **AEBN**, **AdultDVDEmpire / AdultEmpire**, and **Elegant Angel** links (same Empire backend).
+Works with **AEBN**, **AdultDVDEmpire / AdultEmpire**, **Elegant Angel**, and **DVDErotik (`us.dvderotik.com`)** links (same Empire backend).
 
 ## Web UI
 
@@ -112,11 +112,11 @@ WEB_PASSWORD=secret aebndl-web # optional password lock, else open
 # open http://localhost:8000
 ```
 
-- Paste any AEBN / ADE / Elegant Angel link → **Manifest** (per-resolution
+- Paste any AEBN / ADE / Elegant Angel / DVDErotik link → **Manifest** (per-resolution
   copy-to-clipboard links), **Info** (title, studio, duration, performers,
   scenes), **Covers** tabs. `Enter` fetches, click any row copies the link.
-- **Cookies button**: paste Netscape cookie exports for `adultdvdempire.com`
-  or `elegantangel.com`, with **Import** (file upload), **Export** (download
+- **Cookies button**: paste Netscape cookie exports for `adultdvdempire.com`,
+  `elegantangel.com`, or `us.dvderotik.com`, with **Import** (file upload), **Export** (download
   `.txt`), Save in browser (`localStorage`, sent per-request) or Save to
   server (shared fallback, also used by the bot). Shows expiry + PPM balance.
 - Recent links kept as history; optional `WEB_PASSWORD` env locks the UI

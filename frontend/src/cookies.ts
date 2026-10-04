@@ -15,6 +15,7 @@ interface CookieSite {
 export const COOKIE_SITES: CookieSite[] = [
   { site: 'ade', label: 'AdultDVDEmpire', host: 'adultdvdempire.com', store: 'ae_cookies_ade', file: 'adecookies.txt' },
   { site: 'ea', label: 'Elegant Angel', host: 'elegantangel.com', store: 'ae_cookies_ea', file: 'eacookies.txt' },
+  { site: 'dvd', label: 'DVDErotik', host: 'us.dvderotik.com', store: 'ae_cookies_dvd', file: 'dvdcookies.txt' },
 ];
 
 const PREFIX = 'pg';
@@ -290,12 +291,12 @@ function fillSiteBox(site: Site, text: string): void {
 }
 
 function exportAll(): void {
-  const data: Record<string, string> = { version: '1', exported_at: new Date().toISOString(), ade: '', ea: '' };
+  const data: Record<string, string> = { version: '1', exported_at: new Date().toISOString(), ade: '', ea: '', dvd: '' };
   for (const s of COOKIE_SITES) {
     const area = document.querySelector(`#${PREFIX}-area-${s.site}`) as HTMLTextAreaElement | null;
     data[s.site] = (area && area.value.trim()) || localStorage.getItem(s.store) || '';
   }
-  if (!data.ade && !data.ea) {
+  if (!data.ade && !data.ea && !data.dvd) {
     toast('Nothing to export', true);
     return;
   }
@@ -318,7 +319,7 @@ function importAll(e: Event): void {
     const text = String(rd.result || '');
     try {
       const obj = JSON.parse(text) as Record<string, unknown>;
-      if (obj && (typeof obj.ade === 'string' || typeof obj.ea === 'string')) {
+      if (obj && (typeof obj.ade === 'string' || typeof obj.ea === 'string' || typeof obj.dvd === 'string')) {
         let n = 0;
         for (const s of COOKIE_SITES) {
           const v = obj[s.site];
@@ -335,12 +336,13 @@ function importAll(e: Event): void {
     }
     const lines = text.split(/\r?\n/);
     const header = lines.filter((l) => l.trim().startsWith('#'));
-    const buckets: Record<Site, string[]> = { ade: [], ea: [] };
+    const buckets: Record<Site, string[]> = { ade: [], ea: [], dvd: [] };
     for (const line of lines) {
       const t = line.trim();
       if (!t || t.startsWith('#')) continue;
       const host = t.split(/[\t ]+/)[0].toLowerCase();
       if (host.includes('elegantangel')) buckets.ea.push(line);
+      else if (host.includes('dvderotik')) buckets.dvd.push(line);
       else buckets.ade.push(line);
     }
     let n = 0;

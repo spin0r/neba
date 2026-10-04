@@ -44,7 +44,10 @@ MAX_TELEGRAM_FILESIZE = int(os.getenv("MAX_TELEGRAM_FILESIZE_MB", "50")) * 1024 
 ADE_COOKIES_URL = os.getenv("ADE_COOKIES_URL", "")
 
 AEBN_URL_RE = re.compile(r"https?://[^\s]*aebn\.com[^\s]*|https?://m\.aebn\.net[^\s]*", re.IGNORECASE)
-ADE_URL_RE = re.compile(r"https?://(?:www\.)?(?:adultdvdempire|adultempire|elegantangel)\.com/\S+", re.IGNORECASE)
+ADE_URL_RE = re.compile(
+    r"https?://(?:(?:www\.)?(?:adultdvdempire|adultempire|elegantangel)\.com|(?:(?:[a-z0-9-]+\.)?dvderotik\.com))/\S+",
+    re.IGNORECASE,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s|%(levelname)s|%(message)s", datefmt="%H:%M:%S")
@@ -157,8 +160,11 @@ def is_ade_url(url: str) -> bool:
 
 
 def site_label_for(url: str) -> str:
-    if "elegantangel.com" in url.lower():
+    lower = url.lower()
+    if "elegantangel.com" in lower:
         return "EA"
+    if "dvderotik.com" in lower:
+        return "DVDErotik"
     return "ADE" if is_ade_url(url) else "AEBN"
 
 

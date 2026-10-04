@@ -18,6 +18,7 @@ const HIST_MAX = 50;          // keep up to 50 entries (was 20)
 const LEGACY_COOKIES = 'ae_cookies';
 const ADE_COOKIES = 'ae_cookies_ade';
 const EA_COOKIES = 'ae_cookies_ea';
+const DVD_COOKIES = 'ae_cookies_dvd';
 
 let mode: Mode = 'manifest';
 let lastData: ExtractData | null = null;
@@ -26,10 +27,11 @@ const urlInput = $('urlInput') as HTMLInputElement;
 const resultBody = $('resultBody');
 const histBody = $('histBody');
 
-export function browserCookies(): { ade: string; ea: string; legacy: string } {
+export function browserCookies(): { ade: string; ea: string; dvd: string; legacy: string } {
   return {
     ade: localStorage.getItem(ADE_COOKIES) || '',
     ea: localStorage.getItem(EA_COOKIES) || '',
+    dvd: localStorage.getItem(DVD_COOKIES) || '',
     legacy: localStorage.getItem(LEGACY_COOKIES) || '',
   };
 }
@@ -95,7 +97,7 @@ export async function fetchExtract(): Promise<void> {
   resultBody.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching manifest…</div>';
   try {
     const c = browserCookies();
-    const r = await api.extract(url, mode, c.ade, c.ea, c.legacy);
+    const r = await api.extract(url, mode, c.ade, c.ea, c.dvd, c.legacy);
     if (!r.success || !r.data) throw new Error(r.error || 'Extraction failed');
     lastData = r.data;
     pushHist(r.data.source_url || url, r.data.movie_title || r.data.title || '');

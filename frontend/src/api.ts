@@ -88,7 +88,7 @@ export interface SiteCookieStatus {
   plainraw?: boolean;
 }
 
-export type Site = 'ade' | 'ea';
+export type Site = 'ade' | 'ea' | 'dvd';
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -111,9 +111,9 @@ export class AuthError extends Error {
 export const api = {
   authCheck: () => req<{ ok: boolean; locked: boolean }>('GET', '/api/auth-check'),
   login: (password: string) => req<{ success: boolean }>('POST', '/api/login', { password }),
-  extract: (url: string, mode: string, cookies_ade: string, cookies_ea: string, cookies: string) =>
+  extract: (url: string, mode: string, cookies_ade: string, cookies_ea: string, cookies_dvd: string, cookies: string) =>
     req<{ success: boolean; data?: ExtractData; error?: string }>('POST', '/api/extract', {
-      url, mode, cookies_ade, cookies_ea, cookies,
+      url, mode, cookies_ade, cookies_ea, cookies_dvd, cookies,
     }),
   cookieStatus: () => req<Record<Site, SiteCookieStatus>>('GET', '/api/cookies'),
   saveCookies: (site: Site, cookies: string) =>
