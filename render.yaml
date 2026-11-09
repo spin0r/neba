@@ -10,5 +10,13 @@ services:
         sync: false
       - key: ADE_COOKIES_URL
         sync: false
+      - key: THPASTE_API_KEY
+        sync: false
+      - key: THPASTE_ADE_ID
+        sync: false
+      - key: THPASTE_EA_ID
+        sync: false
+      - key: THPASTE_DVD_ID
+        sync: false
       - key: WEB_PASSWORD
         sync: false

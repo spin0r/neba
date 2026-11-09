@@ -70,7 +70,9 @@ def _load_cookies() -> None:
     if _COOKIES_FILE.exists():
         try:
             data = json.loads(_COOKIES_FILE.read_text())
-            _user_ade_cookies.update({int(k): v for k, v in data.items()})
+            # The file is shared with the web UI, which also stores site keys
+            # ("ade", "ea", "dvd"). Only numeric keys are per-user bot sessions.
+            _user_ade_cookies.update({int(k): v for k, v in data.items() if str(k).isdigit()})
             logger.info("Loaded ADE cookies for %d users", len(_user_ade_cookies))
         except Exception as e:
             logger.warning("Failed to load cookies: %s", e)
@@ -98,9 +100,18 @@ def _load_cookies() -> None:
 
 
 def _save_cookies() -> None:
-    """Persist cookies to disk."""
+    """Persist bot sessions without dropping web-UI site keys."""
     try:
-        _COOKIES_FILE.write_text(json.dumps({str(k): v for k, v in _user_ade_cookies.items()}, indent=2))
+        data: dict[str, str] = {}
+        if _COOKIES_FILE.exists():
+            try:
+                existing = json.loads(_COOKIES_FILE.read_text())
+                if isinstance(existing, dict):
+                    data = {k: v for k, v in existing.items() if not str(k).isdigit()}
+            except Exception:
+                data = {}
+        data.update({str(k): v for k, v in _user_ade_cookies.items()})
+        _COOKIES_FILE.write_text(json.dumps(data, indent=2))
     except Exception as e:
         logger.warning("Failed to save cookies: %s", e)
 

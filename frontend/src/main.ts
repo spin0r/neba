@@ -28,8 +28,16 @@ const resultBodyHidden = (): boolean => $('resultBody').innerHTML === '';
 
 function showPage(next: Page): void {
   page = next;
+  if (!authed) {
+    showLogin();
+    return;
+  }
   const onCookies = next === 'cookies';
   showExtractChrome(!onCookies);
+  document.querySelectorAll('.nav-link').forEach((a) => {
+    const href = a.getAttribute('href');
+    a.classList.toggle('active', onCookies ? href === '#/cookies' : href !== '#/cookies');
+  });
   if (onCookies) {
     hideExtractBodies();
     renderCookiesPage($('cookiesPage'));
@@ -131,9 +139,11 @@ document.addEventListener('keydown', (e) => {
 // ── Login ──
 function showLogin(): void {
   authed = false;
+  showExtractChrome(false);
   $('loginBody').classList.add('visible');
   hideExtractBodies();
   $('cookiesPage').classList.remove('visible');
+  setTimeout(() => ($('loginPass') as HTMLInputElement).focus(), 0);
 }
 
 async function doLogin(): Promise<void> {
@@ -143,7 +153,10 @@ async function doLogin(): Promise<void> {
     $('loginBody').classList.remove('visible');
     renderHist();
     if (page === 'cookies') showPage('cookies');
-    else refreshExtractVisibility(true);
+    else {
+      showExtractChrome(true);
+      refreshExtractVisibility(true);
+    }
     toast('Unlocked');
   } else {
     toast('Wrong password', true);
@@ -154,6 +167,7 @@ async function doLogin(): Promise<void> {
 document.addEventListener('DOMContentLoaded', () => {
   initExtractPage();
   renderHist();
+  ($('goBtn') as HTMLElement).onclick = () => void fetchExtract();
   ($('loginBtn') as HTMLElement).onclick = () => void doLogin();
   ($('loginPass') as HTMLInputElement).addEventListener('keydown', (e) => {
     if (e.key === 'Enter') void doLogin();

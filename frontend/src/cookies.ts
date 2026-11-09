@@ -1,4 +1,4 @@
-// ─── Cookies page: per-site boxes, auto-store, PlainRaw sync ───────
+// ─── Cookies page: per-site boxes, auto-store, Thpaste sync ───────
 
 import { api } from './api';
 import type { Site } from './api';
@@ -31,50 +31,64 @@ function storeCookies(cfg: CookieSite, value: string, quiet = false): boolean {
   return true;
 }
 
-function prStatus(site: Site, msg: string, cls = ''): void {
-  const el = document.querySelector(`#${PREFIX}-pr-${site}`);
+function tpStatus(site: Site, msg: string, cls = ''): void {
+  const el = document.querySelector(`#${PREFIX}-tp-${site}`);
   if (el) {
     el.textContent = msg;
-    el.className = 'pr-status' + (cls ? ' ' + cls : '');
+    el.className = 'tp-status' + (cls ? ' ' + cls : '');
   }
 }
 
-async function pushPlainRaw(site: Site, content: string): Promise<boolean> {
-  prStatus(site, 'pushing…');
-  const r = await api.plainrawPush(site, content).catch(() => null);
+function setPasteLink(site: Site, url?: string): void {
+  const a = document.querySelector(`#${PREFIX}-tp-link-${site}`) as HTMLAnchorElement | null;
+  if (!a) return;
+  if (url) {
+    a.href = url;
+    a.hidden = false;
+  } else {
+    a.removeAttribute('href');
+    a.hidden = true;
+  }
+}
+
+async function pushThpaste(site: Site, content: string): Promise<boolean> {
+  tpStatus(site, 'pushing…');
+  const r = await api.thpastePush(site, content).catch(() => null);
   if (r && r.success) {
-    prStatus(site, 'PlainRaw updated', 'ok');
+    tpStatus(site, 'Thpaste updated', 'ok');
+    setPasteLink(site, r.url || r.custom_url || r.raw_url);
     return true;
   }
-  prStatus(site, (r && r.error) || 'push failed', 'err');
-  if (r && r.error && !r.error.includes('No PlainRaw paste configured')) toast(r.error, true);
+  tpStatus(site, (r && r.error) || 'push failed', 'err');
+  if (r && r.error && !r.error.includes('No Thpaste API key configured')) toast(r.error, true);
   return false;
 }
 
-async function pullPlainRaw(site: Site): Promise<void> {
+async function pullThpaste(site: Site): Promise<void> {
   const cfg = COOKIE_SITES.find((x) => x.site === site);
   if (!cfg) return;
-  prStatus(site, 'pulling…');
-  const r = await api.plainrawPull(site).catch(() => null);
+  tpStatus(site, 'pulling…');
+  const r = await api.thpastePull(site).catch(() => null);
   const st = r && r[site];
   if (!st || !st.configured) {
-    prStatus(site, 'no PlainRaw paste configured', 'err');
+    tpStatus(site, 'no Thpaste API key configured', 'err');
     return;
   }
   if (st.error) {
-    prStatus(site, st.error, 'err');
+    tpStatus(site, st.error, 'err');
     return;
   }
   const content = (st.content || '').trim();
   if (!content.includes('etoken')) {
-    prStatus(site, 'paste has no cookies', 'err');
+    tpStatus(site, 'paste has no cookies', 'err');
     return;
   }
   const area = document.querySelector(`#${PREFIX}-area-${site}`) as HTMLTextAreaElement | null;
   if (area) area.value = content;
   storeCookies(cfg, content, true);
-  prStatus(site, 'loaded from PlainRaw', 'ok');
-  toast(`${cfg.label} loaded from PlainRaw`);
+  setPasteLink(site, st.url || st.custom_url || st.raw_url);
+  tpStatus(site, 'loaded from Thpaste', 'ok');
+  toast(`${cfg.label} loaded from Thpaste`);
 }
 
 function boxesHTML(): string {
@@ -94,10 +108,11 @@ function boxesHTML(): string {
         <button class="btn" data-act="server">Server</button>
         <button class="btn primary" data-act="save">Save</button>
       </div>
-      <div class="pr-row">
-        <button class="btn" data-act="pull">↓ PlainRaw</button>
-        <button class="btn" data-act="push">↑ PlainRaw</button>
-        <span class="pr-status" id="${PREFIX}-pr-${s.site}"></span>
+      <div class="tp-row">
+        <button class="btn" data-act="pull">↓ Thpaste</button>
+        <button class="btn" data-act="push">↑ Thpaste</button>
+        <a class="tp-link" id="${PREFIX}-tp-link-${s.site}" target="_blank" rel="noopener noreferrer" hidden>Raw ↗</a>
+        <span class="tp-status" id="${PREFIX}-tp-${s.site}"></span>
       </div>
       <input type="file" class="mFile" accept=".txt,.cookies" style="display:none" />
     </div>`,
@@ -118,14 +133,14 @@ function wireBoxes(root: ParentNode): void {
         const v = area.value.trim();
         if (!storeCookies(cfg, v, true)) return;
         toast(`${cfg.label} cookies stored — tap Server to persist`);
-        void pushPlainRaw(site, v);
+        void pushThpaste(site, v);
       }, 50);
     });
     area.addEventListener('input', () => {
       clearTimeout(debounce);
       debounce = setTimeout(() => {
         const v = area.value.trim();
-        if (v && v.includes('etoken') && storeCookies(cfg, v, true)) void pushPlainRaw(site, v);
+        if (v && v.includes('etoken') && storeCookies(cfg, v, true)) void pushThpaste(site, v);
       }, 1500);
     });
 
@@ -155,7 +170,7 @@ function wireBoxes(root: ParentNode): void {
           const v = area.value.trim();
           if (storeCookies(cfg, v)) {
             toast(`${cfg.label} cookies saved in browser`);
-            await pushPlainRaw(site, v);
+            await pushThpaste(site, v);
           }
           return;
         }
@@ -182,12 +197,12 @@ function wireBoxes(root: ParentNode): void {
           localStorage.removeItem(cfg.store);
           await api.clearCookies(site).catch(() => undefined);
           area.value = '';
-          prStatus(site, '');
+          tpStatus(site, '');
           toast(`${cfg.label} cookies cleared`);
           return;
         }
         if (act === 'pull') {
-          await pullPlainRaw(site);
+          await pullThpaste(site);
           return;
         }
         if (act === 'push') {
@@ -200,7 +215,7 @@ function wireBoxes(root: ParentNode): void {
             toast('No etoken found', true);
             return;
           }
-          if (await pushPlainRaw(site, v)) toast(`${cfg.label} pushed to PlainRaw`);
+          if (await pushThpaste(site, v)) toast(`${cfg.label} pushed to Thpaste`);
           return;
         }
       });
@@ -214,7 +229,7 @@ function wireBoxes(root: ParentNode): void {
         const v = area.value.trim();
         if (storeCookies(cfg, v, true)) {
           toast('File loaded & stored — tap Server to persist');
-          void pushPlainRaw(site, v);
+          void pushThpaste(site, v);
         } else {
           toast('File loaded — review & save');
         }
@@ -258,12 +273,12 @@ function refreshServerStatus(root: ParentNode): void {
     });
 }
 
-// Auto-load: fill any empty box from its PlainRaw paste (never overwrites
+// Auto-load: fill any empty box from its Thpaste paste (never overwrites
 // cookies already stored in this browser).
 async function autoPull(): Promise<void> {
-  let status: Awaited<ReturnType<typeof api.plainrawStatus>> | null = null;
+  let status: Awaited<ReturnType<typeof api.thpasteStatus>> | null = null;
   try {
-    status = await api.plainrawStatus();
+    status = await api.thpasteStatus();
   } catch {
     return;
   }
@@ -277,7 +292,7 @@ async function autoPull(): Promise<void> {
     if (!content.includes('etoken')) continue;
     if (area) area.value = content;
     storeCookies(s, content, true);
-    prStatus(s.site, 'auto-loaded from PlainRaw', 'ok');
+    tpStatus(s.site, 'auto-loaded from Thpaste', 'ok');
   }
 }
 
@@ -287,7 +302,36 @@ function fillSiteBox(site: Site, text: string): void {
   const area = document.querySelector(`#${PREFIX}-area-${site}`) as HTMLTextAreaElement | null;
   if (area) area.value = text;
   storeCookies(cfg, text.trim(), true);
-  void pushPlainRaw(site, text.trim());
+  void pushThpaste(site, text.trim());
+}
+
+async function importAllToThpaste(): Promise<void> {
+  const server = await api.thpasteImport().catch(() => null);
+  let ok = 0;
+  let fail = 0;
+  let skipped = 0;
+  for (const s of COOKIE_SITES) {
+    const area = document.querySelector(`#${PREFIX}-area-${s.site}`) as HTMLTextAreaElement | null;
+    const local = ((area && area.value.trim()) || localStorage.getItem(s.store) || '').trim();
+    if (local.includes('etoken')) {
+      if (await pushThpaste(s.site, local)) ok++;
+      else fail++;
+      continue;
+    }
+    const st = server?.results?.[s.site];
+    if (st?.success) {
+      ok++;
+      setPasteLink(s.site, st.url || st.custom_url || st.raw_url);
+      tpStatus(s.site, 'imported server cookies', 'ok');
+    } else if (st?.skipped) {
+      skipped++;
+    } else if (st) {
+      fail++;
+      tpStatus(s.site, st.error || 'import failed', 'err');
+    }
+  }
+  if (ok) toast(`Thpaste import complete — ${ok} paste${ok > 1 ? 's' : ''} ready`);
+  else toast(!fail && skipped ? 'No cookies to import' : 'Thpaste import failed', true);
 }
 
 function exportAll(): void {
@@ -366,6 +410,7 @@ export function renderCookiesPage(root: HTMLElement): void {
         <div class="modal-actions" style="justify-content:flex-start;margin:0 12px 12px 12px;">
           <button class="btn" id="pgExportAll">Export all</button>
           <button class="btn" id="pgImportAll">Import all</button>
+          <button class="btn primary" id="pgThpasteImportAll">Push all → Thpaste</button>
           <input type="file" id="pgImportFile" accept=".json,.txt,.cookies" style="display:none" />
         </div>
         ${boxesHTML()}
@@ -374,6 +419,7 @@ export function renderCookiesPage(root: HTMLElement): void {
     ($('pgExportAll') as HTMLElement).onclick = exportAll;
     ($('pgImportAll') as HTMLElement).onclick = () => ($('pgImportFile') as HTMLInputElement).click();
     ($('pgImportFile') as HTMLInputElement).onchange = importAll;
+    ($('pgThpasteImportAll') as HTMLElement).onclick = () => void importAllToThpaste();
     built = true;
   } else {
     for (const s of COOKIE_SITES) {

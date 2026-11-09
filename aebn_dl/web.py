@@ -12,8 +12,8 @@ Serves the Vite + TypeScript frontend (``frontend/dist``, built with
 - ``GET  /api/cookies``      per-site session status (``ade`` + ``ea``)
 - ``POST /api/cookies``      ``{"site": "ade"|"ea", "cookies": "..."}`` save session
 - ``DELETE /api/cookies?site=ade|ea``  clear one (or both) saved session(s)
-- ``GET  /api/plainraw?site=ade``      pull site paste content from PlainRaw
-- ``POST /api/plainraw``     ``{"site": ..., "content": ...}`` push to PlainRaw
+- ``GET  /api/thpaste?site=ade``       pull site paste content from Thpaste
+- ``POST /api/thpaste``      ``{"site": ..., "content": ...}`` push to Thpaste
 
 Only the standard library is used so this works without the ``bot`` extra.
 Run standalone with ``aebndl-web`` (or ``python -m aebn_dl.web``).
@@ -29,6 +29,8 @@ import logging
 import os
 import re
 import secrets
+import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -161,62 +163,285 @@ def _save_site_cookies(site: str, cookie_text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PlainRaw sync (https://api.plainraw.com/api) — one paste per site.
-# Configure with PLAINRAW_ADE_UUID / PLAINRAW_ADE_KEY
-# (and PLAINRAW_EA_UUID / PLAINRAW_EA_KEY, PLAINRAW_DVD_UUID / PLAINRAW_DVD_KEY).
+# Thpaste sync (https://thpaste.com/api/v1) — one paste per site.
+# Configure with THPASTE_API_KEY. Paste ids are read from THPASTE_<SITE>_ID
+# (or thpaste_state.json after the first push); an optional
+# THPASTE_<SITE>_SLUG creates a stable custom link.
 # ---------------------------------------------------------------------------
-PLAINRAW_API = "https://api.plainraw.com/api"
-PLAINRAW_MAX = 30000
-PLAINRAW_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+THPASTE_API_URL = os.getenv("THPASTE_API_URL", "https://thpaste.com/api/v1").rstrip("/")
+THPASTE_KEY = os.getenv("THPASTE_API_KEY", "").strip()
+THPASTE_MAX = 512 * 1024
+THPASTE_STATE_FILE = HERE / "thpaste_state.json"
+THPASTE_UA = "aebndl-web"
+_thpaste_lock = threading.Lock()
 
 
-def _plainraw_cfg(site: str) -> tuple[str, str]:
+def _thpaste_load_state() -> dict[str, dict[str, str]]:
+    try:
+        data = json.loads(THPASTE_STATE_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _thpaste_save_state(state: dict[str, dict[str, str]]) -> None:
+    try:
+        tmp = THPASTE_STATE_FILE.with_name(THPASTE_STATE_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        tmp.replace(THPASTE_STATE_FILE)
+    except Exception as e:
+        logger.warning("Could not save Thpaste state: %s", e)
+
+
+def _thpaste_site_cfg(site: str) -> tuple[str, str, str, str]:
+    """Return (api_key, paste_id, slug, source) for one site."""
     site = site.lower()
     if site not in ("ade", "ea", "dvd"):
-        return "", ""
-    return (
-        os.getenv(f"PLAINRAW_{site.upper()}_UUID", ""),
-        os.getenv(f"PLAINRAW_{site.upper()}_KEY", ""),
-    )
+        return "", "", "", ""
+    slug = os.getenv(f"THPASTE_{site.upper()}_SLUG", "").strip()
+    env_id = os.getenv(f"THPASTE_{site.upper()}_ID", "").strip()
+    if env_id:
+        return THPASTE_KEY, env_id, slug, "env"
+    with _thpaste_lock:
+        state = _thpaste_load_state()
+    entry = state.get(site)
+    state_id = str(entry.get("id", "")).strip() if isinstance(entry, dict) else ""
+    return THPASTE_KEY, state_id, slug, ("state" if state_id else "")
 
 
-def _plainraw_pull(site: str) -> dict[str, Any]:
-    uuid, key = _plainraw_cfg(site)
-    if not uuid or not key:
-        return {"configured": False}
-    try:
-        qs = urllib.parse.urlencode({"uuid": uuid, "editKey": key})
-        req = urllib.request.Request(f"{PLAINRAW_API}/snippet?{qs}", method="GET",
-                                     headers={"User-Agent": PLAINRAW_UA})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-        return {
-            "configured": True,
-            "content": data.get("content", ""),
-            "updated_at": data.get("updatedAt", ""),
-        }
-    except Exception as e:
-        return {"configured": True, "error": str(e)}
+def _thpaste_entry(site: str) -> dict[str, str]:
+    with _thpaste_lock:
+        state = _thpaste_load_state()
+    entry = state.get(site)
+    return entry if isinstance(entry, dict) else {}
 
 
-def _plainraw_push(site: str, content: str) -> dict[str, Any]:
-    uuid, key = _plainraw_cfg(site)
-    if not uuid or not key:
-        return {"success": False, "error": f"No PlainRaw paste configured for '{site}'"}
-    if len(content) > PLAINRAW_MAX:
-        return {"success": False, "error": f"Content too large for PlainRaw (max {PLAINRAW_MAX} chars)"}
-    try:
-        body = json.dumps({"uuid": uuid, "editKey": key, "content": content}).encode()
-        req = urllib.request.Request(
-            f"{PLAINRAW_API}/update", data=body,
-            headers={"Content-Type": "application/json", "User-Agent": PLAINRAW_UA},
-            method="POST",
+def _thpaste_remember(site: str, paste: dict[str, Any]) -> None:
+    paste_id = str(paste.get("id", "") or "").strip()
+    if not paste_id:
+        return
+    with _thpaste_lock:
+        state = _thpaste_load_state()
+        entry = state.get(site) if isinstance(state.get(site), dict) else {}
+        entry.update(
+            {
+                "id": paste_id,
+                "url": str(paste.get("url", "") or ""),
+                "raw_url": str(paste.get("raw_url", "") or ""),
+                "custom_url": str(paste.get("custom_url", "") or ""),
+                "title": str(paste.get("title", "") or ""),
+            }
         )
+        state[site] = entry
+        _thpaste_save_state(state)
+
+
+def _thpaste_forget(site: str) -> None:
+    with _thpaste_lock:
+        state = _thpaste_load_state()
+        state.pop(site, None)
+        _thpaste_save_state(state)
+
+
+def _thpaste_headers(api_key: str, has_body: bool) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "User-Agent": THPASTE_UA,
+    }
+    if has_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+def _thpaste_request(method: str, path: str, api_key: str, body: dict[str, Any] | None = None) -> tuple[dict[str, Any], int, dict[str, str]]:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        f"{THPASTE_API_URL}{path}",
+        data=data,
+        headers=_thpaste_headers(api_key, data is not None),
+        method=method,
+    )
+    try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode())
-        return {"success": True, "updated_at": data.get("updatedAt", "")}
+            raw = resp.read().decode("utf-8", "replace")
+            payload = json.loads(raw) if raw else {}
+            return (payload if isinstance(payload, dict) else {}, resp.status, {k.lower(): v for k, v in resp.headers.items()})
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            payload = json.loads(raw) if raw else {}
+        except Exception:
+            payload = {}
+        return (payload if isinstance(payload, dict) else {}, e.code, {k.lower(): v for k, v in (e.headers or {}).items()})
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return ({"error": {"code": "REQUEST_FAILED", "message": str(e)}}, 0, {})
+
+
+def _thpaste_error(payload: dict[str, Any], status: int, headers: dict[str, str] | None = None) -> str:
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(err, dict):
+        code = str(err.get("code", "") or "")
+        message = str(err.get("message", "") or "").strip()
+        details = err.get("details")
+        if isinstance(details, dict) and details:
+            bits = "; ".join(f"{k}: {v}" for k, v in details.items())
+            message = f"{message} ({bits})" if message else bits
+        if status == 429:
+            retry = (headers or {}).get("retry-after", "")
+            if retry:
+                message = f"{message or 'Rate limited'} — retry in {retry}s"
+        if message:
+            return f"Thpaste {code}: {message}" if code else message
+        return f"Thpaste {code}" if code else f"Thpaste HTTP {status}"
+    if isinstance(err, str) and err:
+        return err
+    return f"Thpaste HTTP {status}" if status else "Thpaste request failed"
+
+
+def _thpaste_paste_data(payload: dict[str, Any]) -> dict[str, Any] | None:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def _thpaste_find_by_slug(api_key: str, slug: str) -> dict[str, Any] | None:
+    page = 1
+    while page <= 10:
+        payload, status, _headers = _thpaste_request("GET", f"/pastes?page={page}&per_page=100", api_key)
+        if status != 200:
+            return None
+        items = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            custom = str(item.get("custom_url", "") or "").rstrip("/")
+            if custom.endswith(f"/s/{slug}"):
+                return item
+        meta = payload.get("meta") if isinstance(payload, dict) else None
+        try:
+            pages = int(meta.get("pages", 1)) if isinstance(meta, dict) else 1
+        except (TypeError, ValueError):
+            pages = 1
+        if page >= pages:
+            break
+        page += 1
+    return None
+
+
+def _thpaste_pull(site: str) -> dict[str, Any]:
+    api_key, paste_id, slug, _source = _thpaste_site_cfg(site)
+    if not api_key:
+        return {"configured": False}
+    if not paste_id and slug:
+        found = _thpaste_find_by_slug(api_key, slug)
+        if found:
+            _thpaste_remember(site, found)
+            paste_id = str(found.get("id", "") or "").strip()
+    if not paste_id:
+        return {"configured": True, "error": "No Thpaste paste yet — push cookies to create one"}
+    payload, status, headers = _thpaste_request("GET", f"/pastes/{urllib.parse.quote(paste_id)}", api_key)
+    if status != 200:
+        return {"configured": True, "error": _thpaste_error(payload, status, headers)}
+    paste = _thpaste_paste_data(payload)
+    if not paste:
+        return {"configured": True, "error": "Thpaste returned an unexpected response"}
+    _thpaste_remember(site, paste)
+    return {
+        "configured": True,
+        "id": str(paste.get("id", "") or paste_id),
+        "title": str(paste.get("title", "") or ""),
+        "url": str(paste.get("url", "") or ""),
+        "raw_url": str(paste.get("raw_url", "") or ""),
+        "custom_url": str(paste.get("custom_url", "") or ""),
+        "content": str(paste.get("content", "") or ""),
+        "created_at": str(paste.get("created_at", "") or ""),
+    }
+
+
+def _thpaste_import_all() -> dict[str, Any]:
+    """Push every saved site cookie session to Thpaste (one paste per site)."""
+    results: dict[str, Any] = {}
+    for site in ("ade", "ea", "dvd"):
+        content = _load_site_cookies(site)
+        if "etoken" not in content:
+            results[site] = {"success": False, "skipped": True, "error": "No saved cookies for this site"}
+            continue
+        results[site] = _thpaste_push(site, content)
+    return {
+        "success": any(r.get("success") for r in results.values() if isinstance(r, dict)),
+        "results": results,
+    }
+
+
+def _thpaste_push_result(paste: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "success": True,
+        "id": str(paste.get("id", "") or ""),
+        "title": str(paste.get("title", "") or ""),
+        "url": str(paste.get("url", "") or ""),
+        "raw_url": str(paste.get("raw_url", "") or ""),
+        "custom_url": str(paste.get("custom_url", "") or ""),
+        "created_at": str(paste.get("created_at", "") or ""),
+    }
+
+
+def _thpaste_push(site: str, content: str) -> dict[str, Any]:
+    api_key, paste_id, slug, source = _thpaste_site_cfg(site)
+    if not api_key:
+        return {"success": False, "error": "No Thpaste API key configured (set THPASTE_API_KEY)"}
+    size = len(content.encode("utf-8"))
+    if size > THPASTE_MAX:
+        return {"success": False, "error": f"Content too large for Thpaste ({size} bytes, max {THPASTE_MAX})"}
+
+    if paste_id:
+        payload, status, headers = _thpaste_request("PATCH", f"/pastes/{urllib.parse.quote(paste_id)}", api_key, {"content": content})
+        if status == 404:
+            if source == "env":
+                return {"success": False, "error": f"Thpaste paste '{paste_id}' was not found — check THPASTE_{site.upper()}_ID"}
+            _thpaste_forget(site)
+            paste_id = ""
+        elif status not in (200, 201):
+            return {"success": False, "error": _thpaste_error(payload, status, headers)}
+        else:
+            paste = _thpaste_paste_data(payload)
+            if paste:
+                _thpaste_remember(site, paste)
+                return _thpaste_push_result(paste)
+            return {"success": True}
+
+    if slug:
+        found = _thpaste_find_by_slug(api_key, slug)
+        if found:
+            _thpaste_remember(site, found)
+            found_id = str(found.get("id", "") or "").strip()
+            if found_id:
+                payload, status, headers = _thpaste_request("PATCH", f"/pastes/{urllib.parse.quote(found_id)}", api_key, {"content": content})
+                if status in (200, 201):
+                    paste = _thpaste_paste_data(payload)
+                    if paste:
+                        _thpaste_remember(site, paste)
+                        return _thpaste_push_result(paste)
+                return {"success": False, "error": _thpaste_error(payload, status, headers)}
+
+    body: dict[str, Any] = {
+        "content": content,
+        "title": f"AEBN cookies — {site.upper()}",
+        "language": "plain",
+        "visibility": os.getenv("THPASTE_VISIBILITY", "unlisted"),
+        "expiry": os.getenv("THPASTE_EXPIRY", "never"),
+    }
+    if slug:
+        body["slug"] = slug
+    payload, status, headers = _thpaste_request("POST", "/pastes", api_key, body)
+    if status not in (200, 201):
+        return {"success": False, "error": _thpaste_error(payload, status, headers)}
+    paste = _thpaste_paste_data(payload)
+    if not paste:
+        return {"success": False, "error": "Thpaste returned an unexpected response"}
+    _thpaste_remember(site, paste)
+    return _thpaste_push_result(paste)
 
 
 def _format_duration(duration_s: int | None) -> str:
@@ -552,20 +777,25 @@ class Handler(BaseHTTPRequestHandler):
                             info["account"] = executor.submit(_account_info, saved).result(timeout=30)
                         except Exception as e:
                             info["account_error"] = str(e)
-                puuid, _ = _plainraw_cfg(site)
-                info["plainraw"] = bool(puuid)
+                api_key, _, _, _ = _thpaste_site_cfg(site)
+                info["thpaste"] = bool(api_key)
+                entry = _thpaste_entry(site)
+                if entry.get("url"):
+                    info["thpaste_url"] = entry["url"]
+                if entry.get("raw_url"):
+                    info["thpaste_raw_url"] = entry["raw_url"]
                 out[site] = info
             self._send_json(out)
             return
 
-        if path == "/api/plainraw":
+        if path == "/api/thpaste":
             if not self._require_auth():
                 return
             qs = parse_qs(parsed.query or "")
             sites = qs.get("site", [])
             targets = [s for s in sites if s in ("ade", "ea", "dvd")] or ["ade", "ea", "dvd"]
-            futs = {s: executor.submit(_plainraw_pull, s) for s in targets}
-            self._send_json({s: f.result(timeout=30) for s, f in futs.items()})
+            futs = {s: executor.submit(_thpaste_pull, s) for s in targets}
+            self._send_json({s: f.result(timeout=60) for s, f in futs.items()})
             return
 
         if path in ("/", "/index.html", "/cookies"):
@@ -648,7 +878,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "site": site, "expiry": _cookie_expiry(cookie_text)})
             return
 
-        if path == "/api/plainraw":
+        if path == "/api/thpaste":
             body = self._read_json()
             site = str(body.get("site", "") or "").lower()
             content = str(body.get("content", "") or "")
@@ -658,7 +888,12 @@ class Handler(BaseHTTPRequestHandler):
             if "etoken" not in content:
                 self._send_json({"success": False, "error": "No etoken found — refusing to push"}, 200)
                 return
-            result = executor.submit(_plainraw_push, site, content).result(timeout=30)
+            result = executor.submit(_thpaste_push, site, content).result(timeout=60)
+            self._send_json(result)
+            return
+
+        if path == "/api/thpaste/import":
+            result = executor.submit(_thpaste_import_all).result(timeout=120)
             self._send_json(result)
             return
 

@@ -67,7 +67,7 @@ pip install -e ".[bot]"
 
 ### Configuration
 
-Create `.env` file from `.env.example` or export env vars:
+Create `aebn_dl/.env` from `aebn_dl/.env.example` or export env vars:
 
 ```
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF...  # from @BotFather
@@ -123,24 +123,33 @@ WEB_PASSWORD=secret aebndl-web # optional password lock, else open
   behind a login view.
 
 API (same-origin JSON): `POST /api/extract {url, mode, cookies}`,
-`GET/POST/DELETE /api/cookies`, `GET /api/auth-check`, `POST /api/login`.
+`GET/POST/DELETE /api/cookies`, `GET/POST /api/thpaste`,
+`POST /api/thpaste/import`, `GET /api/auth-check`, `POST /api/login`.
 
-### PlainRaw cookie sync
+### Thpaste cookie sync
 
 Each site box on the `/cookies` page syncs two-way with a
-[PlainRaw](https://www.plainraw.com) paste (same host the bot already reads
-via `ADE_COOKIES_URL`):
+[Thpaste](https://thpaste.com) paste. The API key stays on the server; the
+browser only talks to the backend proxy.
 
 ```
-PLAINRAW_ADE_UUID=b36c9c54ef02   # paste id from your edit link
-PLAINRAW_ADE_KEY=830c23ac3...    # edit key (secret — never commit)
-# PLAINRAW_EA_UUID= / PLAINRAW_EA_KEY=  (second paste for Elegant Angel)
+THPASTE_API_KEY=tp_...           # Thpaste dashboard → API keys (never commit)
+# Optional: reuse existing pastes instead of auto-creating one per site.
+# THPASTE_ADE_ID= / THPASTE_EA_ID= / THPASTE_DVD_ID=
+# Optional: stable custom links (https://thpaste.com/s/<slug>).
+# THPASTE_ADE_SLUG= / THPASTE_EA_SLUG= / THPASTE_DVD_SLUG=
 ```
 
-- **Pull (`↓ PlainRaw`)**: loads the paste into the box and stores it.
-- **Push (`↑ PlainRaw`)**: writes the box to the paste.
+- **Pull (`↓ Thpaste`)**: loads the paste into the box and stores it.
+- **Push (`↑ Thpaste`)**: writes the box to the paste, creating it on first use.
+- **Push all (`Push all → Thpaste`)**: imports every saved/browser cookie box
+  and creates or updates its paste in one go.
 - **Auto-push**: pasting, importing, or saving cookies pushes automatically
-  when a paste is configured for that site.
+  when an API key is configured for that site.
+- Paste ids created by the UI are kept in `aebn_dl/thpaste_state.json`; set
+  `THPASTE_<SITE>_ID` to pin an existing paste instead.
+- Set `ADE_COOKIES_URL` to the ADE paste's `raw_url` if the bot should load
+  its cookies from Thpaste at startup.
 
 Inline buttons: `📄 Get m3u8 / DASH URL` (primary), per-resolution shortcuts, `Refresh m3u8`, `Show info`.
 

@@ -80,12 +80,38 @@ export interface AccountInfo {
   membership: string;
 }
 
+export interface ThpasteInfo {
+  configured: boolean;
+  id?: string;
+  title?: string;
+  url?: string;
+  raw_url?: string;
+  custom_url?: string;
+  content?: string;
+  created_at?: string;
+  error?: string;
+}
+
+export interface ThpastePushResult {
+  success: boolean;
+  id?: string;
+  title?: string;
+  url?: string;
+  raw_url?: string;
+  custom_url?: string;
+  created_at?: string;
+  error?: string;
+  skipped?: boolean;
+}
+
 export interface SiteCookieStatus {
   configured: boolean;
   expiry?: CookieExpiry;
   account?: AccountInfo;
   account_error?: string;
-  plainraw?: boolean;
+  thpaste?: boolean;
+  thpaste_url?: string;
+  thpaste_raw_url?: string;
 }
 
 export type Site = 'ade' | 'ea' | 'dvd';
@@ -120,12 +146,12 @@ export const api = {
     req<{ success: boolean; site?: Site; expiry?: CookieExpiry; error?: string }>('POST', '/api/cookies', { site, cookies }),
   clearCookies: (site: Site) =>
     req<{ success: boolean }>('DELETE', `/api/cookies?site=${site}`),
-  plainrawStatus: () =>
-    req<Record<Site, { configured: boolean; content?: string; updated_at?: string; error?: string }>>('GET', '/api/plainraw'),
-  plainrawPull: (site: Site) =>
-    req<Record<Site, { configured: boolean; content?: string; updated_at?: string; error?: string }>>(
-      'GET', `/api/plainraw?site=${site}`,
-    ),
-  plainrawPush: (site: Site, content: string) =>
-    req<{ success: boolean; updated_at?: string; error?: string }>('POST', '/api/plainraw', { site, content }),
+  thpasteStatus: () =>
+    req<Record<Site, ThpasteInfo>>('GET', '/api/thpaste'),
+  thpastePull: (site: Site) =>
+    req<Record<Site, ThpasteInfo>>('GET', `/api/thpaste?site=${site}`),
+  thpastePush: (site: Site, content: string) =>
+    req<ThpastePushResult>('POST', '/api/thpaste', { site, content }),
+  thpasteImport: () =>
+    req<{ success: boolean; results: Record<Site, ThpastePushResult> }>('POST', '/api/thpaste/import'),
 };
