@@ -24,23 +24,66 @@ def upgrade_frame_width(url: str, width: int = 3840) -> str:
     return f"{url}{sep}w={width}"
 
 
-def extract_scene_backdrop(html: str) -> str | None:
-    """Extract a scene backdrop/poster photo URL from the page HTML."""
+def extract_scene_backdrop(
+    html: str,
+    item_id: str | int | None = None,
+    scene_id: str | int | None = None,
+    slug: str | None = None,
+) -> str | None:
+    """Extract a scene backdrop/poster photo URL from the page HTML, or construct it."""
     matches = _BACKDROP_RE.findall(html)
-    if not matches:
-        return None
-    for url in matches:
-        if "/backdrop/1920/" in url or "/backdrop/3840/" in url:
-            return upgrade_backdrop_width(url, 1280)
-    return upgrade_backdrop_width(matches[0], 1280)
+    if matches:
+        for url in matches:
+            if "/backdrop/1920/" in url or "/backdrop/3840/" in url:
+                return upgrade_backdrop_width(url, 1280)
+        return upgrade_backdrop_width(matches[0], 1280)
+
+    # Check for meta og:image or link tags with backdrop
+    meta_m = re.search(r'[\'"](https?://imgs\d?cdn\.adultempire\.com/backdrop/[^\'"]+)[\'"]', html, re.I)
+    if meta_m:
+        return upgrade_backdrop_width(meta_m.group(1), 1280)
+
+    # If item_id/master_id and scene_id are available, construct the backdrop URL
+    # On Adult Empire CDN, the backdrop URL format is:
+    # https://imgs1cdn.adultempire.com/backdrop/1920/{master_id}_{scene_id}/{slug}.jpg
+    # Note: the master_id corresponds to the video master ID (which appears in VideoObject / frame URLs)
+    if scene_id:
+        master = None
+        # Always check VideoObject thumbnailUrl or frame URL in HTML first for the true video master_id
+        vo_m = re.search(r'"thumbnailUrl":\s*"https?://imgs\d?cdn\.adultempire\.com/frame/(\d+)', html)
+        if vo_m:
+            master = vo_m.group(1)
+        if not master:
+            frame_m = re.search(r'https?://imgs\d?cdn\.adultempire\.com/frame/(\d+)', html)
+            if frame_m:
+                master = frame_m.group(1)
+        if not master and item_id:
+            master = str(item_id)
+
+        if master:
+            clean_slug = slug or "scene"
+            if clean_slug.endswith(".html"):
+                clean_slug = clean_slug[:-5]
+            if clean_slug.endswith("-streaming-scene"):
+                clean_slug = clean_slug[:-16]
+            clean_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", clean_slug).strip("-") or "scene"
+            return f"https://imgs1cdn.adultempire.com/backdrop/1920/{master}_{scene_id}/{clean_slug}.jpg"
+
+    return None
 
 
-def extract_scene_thumbnail(html: str, target_tc: str | int | None = None) -> str | None:
+def extract_scene_thumbnail(
+    html: str,
+    target_tc: str | int | None = None,
+    item_id: str | int | None = None,
+    scene_id: str | int | None = None,
+    slug: str | None = None,
+) -> str | None:
     """
     Extract a representative thumbnail preview image for a scene.
     Prefers dedicated backdrop photo over frame grab, falling back to frames.
     """
-    bd = extract_scene_backdrop(html)
+    bd = extract_scene_backdrop(html, item_id=item_id, scene_id=scene_id, slug=slug)
     if bd:
         return bd
 

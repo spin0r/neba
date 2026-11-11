@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from .constants import (
@@ -26,38 +27,68 @@ logger = logging.getLogger(__name__)
 
 
 def extract_player_params(html: str) -> dict[str, str] | None:
-    """Extract player init params from HTML using regexes."""
+    """Extract AEVideoPlayer init params from HTML."""
+    if not html:
+        return None
+
+    # 1. Try regex on the player initialization block
     m = _PLAYER_INIT_RE.search(html)
     if m:
-        item_id, site, key, timestamp, sig, ptype, scene_id = m.groups()
+        item_id, site, key, timestamp, sig = m.groups()[:5]
+        # Also try to extract scene_id and type from nearby within the call
+        scene_m = _SCENE_ID_RE.search(html, m.start(), min(len(html), m.end() + 500))
+        type_m = _TYPE_RE.search(html, m.start(), min(len(html), m.end() + 500))
         return {
             "item_id": item_id,
+            "scene_id": scene_m.group(1) if scene_m else "",
+            "type": type_m.group(1) if type_m else "",
             "site": site,
             "key": key,
             "timestamp": timestamp,
             "sig": sig or "",
-            "type": ptype or "",
-            "scene_id": scene_id or "",
         }
 
-    # Fallback: find individual values in the page
-    site_m = _SITE_RE.search(html)
-    key_m = _KEY_RE.search(html)
-    ts_m = _TIMESTAMP_RE.search(html)
-    item_m = _ITEM_ID_RE.search(html)
+    # 2. Broader flexible search within AEVideoPlayer(...) block
+    call_m = re.search(r"AEVideoPlayer\s*\(\s*\{([^}]+)\}", html, re.DOTALL | re.IGNORECASE)
+    if call_m:
+        block = call_m.group(1)
+        item_m = _ITEM_ID_RE.search(block)
+        site_m = _SITE_RE.search(block)
+        key_m = _KEY_RE.search(block)
+        ts_m = _TIMESTAMP_RE.search(block)
+        sig_m = _SIG_RE.search(block)
+        scene_m = _SCENE_ID_RE.search(block)
+        type_m = _TYPE_RE.search(block)
 
-    if site_m and key_m and ts_m and item_m:
-        sig_m = _SIG_RE.search(html)
-        type_m = _TYPE_RE.search(html)
-        scene_m = _SCENE_ID_RE.search(html)
+        if key_m and ts_m and sig_m:
+            return {
+                "item_id": item_m.group(1) if item_m else "",
+                "scene_id": scene_m.group(1) if scene_m else "",
+                "type": type_m.group(1) if type_m else "",
+                "site": site_m.group(1) if site_m else ADE_SITE_API_KEY,
+                "key": key_m.group(1),
+                "timestamp": ts_m.group(1),
+                "sig": sig_m.group(1),
+            }
+
+    # 3. Fallback: extract individual fields from anywhere in the document
+    item_ids = _ITEM_ID_RE.findall(html)
+    scene_ids = _SCENE_ID_RE.findall(html)
+    sites = _SITE_RE.findall(html)
+    keys = _KEY_RE.findall(html)
+    timestamps = _TIMESTAMP_RE.findall(html)
+    sigs = _SIG_RE.findall(html)
+    types = _TYPE_RE.findall(html)
+
+    if keys and timestamps and sigs:
         return {
-            "item_id": item_m.group(1),
-            "site": site_m.group(1),
-            "key": key_m.group(1),
-            "timestamp": ts_m.group(1),
-            "sig": sig_m.group(1) if sig_m else "",
-            "type": type_m.group(1) if type_m else "",
-            "scene_id": scene_m.group(1) if scene_m else "",
+            "item_id": item_ids[0] if item_ids else "",
+            "scene_id": scene_ids[0] if scene_ids else "",
+            "type": types[0] if types else "",
+            "site": sites[0] if sites else ADE_SITE_API_KEY,
+            "key": keys[0],
+            "timestamp": timestamps[0],
+            "sig": sigs[0],
         }
 
     return None
@@ -66,48 +97,31 @@ def extract_player_params(html: str) -> dict[str, str] | None:
 def get_playlist_url_from_verify(
     session: CustomSession,
     item_id: str,
-    site: str,
     key: str,
     timestamp: str,
     sig: str = "",
-    player_type: str = "",
-    scene_id: str = "",
-    origin_url: str = "",
-) -> tuple[str, dict[str, Any]]:
-    """Call Digiflix verify API to obtain playlist URL and item metadata."""
+    site: str = ADE_SITE_API_KEY,
+    stream_type: str = "VOD",
+    scene_id: str | int | None = None,
+) -> dict[str, Any]:
+    """Call the digiflix verify endpoint to get the streaming URL."""
     payload: dict[str, Any] = {
-        "item_id": item_id,
-        "site": site,
-        "key": key,
+        "item_id": int(item_id),
+        "encrypted_customer_id": key,
+        "signature": sig,
         "timestamp": timestamp,
-        "site_api_key": ADE_SITE_API_KEY,
+        "stream_type": stream_type,
+        "initiate_tracking": True,
+        "forcehd": None,
     }
-    if sig:
-        payload["sig"] = sig
-    if player_type:
-        payload["type"] = player_type
     if scene_id:
-        payload["scene_id"] = scene_id
+        payload["scene_id"] = int(scene_id)
 
-    verify_headers = {
+    headers = {
         "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://player.digiflix.video",
-        "Referer": "https://player.digiflix.video/",
+        "api_key": site,
     }
 
-    resp = session.post(ADE_VERIFY_URL, json=payload, headers=verify_headers, timeout=20)
-    if resp.status_code != 200:
-        raise ValueError(f"Digiflix verify API returned HTTP {resp.status_code}: {resp.text[:200]}")
-
-    data = resp.json()
-    if not data.get("success"):
-        msg = data.get("message") or data.get("error") or str(data)
-        raise ValueError(f"Digiflix verify failed: {msg}")
-
-    result = data.get("result", {})
-    playlist_url = result.get("playlist_url") or result.get("stream_url") or ""
-    if not playlist_url:
-        raise ValueError(f"No playlist_url in Digiflix verify response: {data}")
-
-    return playlist_url, result
+    resp = session.post(ADE_VERIFY_URL, json=payload, headers=headers)
+    resp.raise_for_status()
+    return resp.json()

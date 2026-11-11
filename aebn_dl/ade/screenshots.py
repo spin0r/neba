@@ -1,12 +1,14 @@
 """Screenshot, gallery, and caps probe helpers for ADE."""
 from __future__ import annotations
 
+from html import unescape as html_unescape
 import logging
 import re
 from typing import Any
 
-from .constants import _ANY_CAPS_RE, _EA_THUMB_RE, _FRAME_RE, _SCENE_WIDGET_RE
-from .thumbnails import frame_width_value, upgrade_frame_width
+from .constants import _ANY_CAPS_RE, _EA_THUMB_RE, _FRAME_RE, _FRAME_URL_RE
+from .metadata import scenes_info as _scenes_info
+from .thumbnails import frame_width_value as _frame_width_value, upgrade_frame_width as _upgrade_frame_width
 
 try:
     from ..custom_session import CustomSession
@@ -16,302 +18,344 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def extract_ea_screenshots(
-    html: str,
-    master: str | int | None = None,
-    item_id: str | int | None = None,
-) -> list[dict[str, str]]:
-    """Extract full-size screenshot URLs from thumbnail patterns on Elegant Angel."""
-    seen: set[str] = set()
+def extract_ea_screenshots(html: str, master: str | int | None = None) -> list[dict[str, str]]:
+    """Extract caps stills, optionally filtered to one master id."""
+    want = str(master) if master not in (None, "") else ""
+    seen: set[tuple[str, ...]] = set()
     shots: list[dict[str, str]] = []
 
-    for m in _EA_THUMB_RE.finditer(html):
-        prefix_folder, _thumb_w, m_id, frame_idx = m.groups()
-        if master is not None and str(master) != m_id:
+    # Frame images (e.g. DVDErotik / ADE scene pages)
+    for m in _FRAME_RE.finditer(html or ""):
+        mst, offset = m.group(1), m.group(2)
+        if want and mst != want:
             continue
-        thumb_url = m.group(0)
-        full_url = f"https://capscdn.adultempire.com/n/{prefix_folder}/1280/{m_id}_{frame_idx}_1280c.jpg"
-        if full_url not in seen:
-            seen.add(full_url)
-            shots.append({"url": full_url, "thumbnail": thumb_url})
-
-    if shots:
-        return shots
-
-    target_id_str = str(item_id) if item_id is not None else (str(master) if master is not None else None)
-    for m in _ANY_CAPS_RE.finditer(html):
-        kind, prefix_folder, _src_w, m_id, frame_idx = m.groups()
-        if target_id_str and m_id != target_id_str:
+        key = (mst, offset)
+        if key in seen:
             continue
-        thumb_url = m.group(0)
-        full_url = f"https://capscdn.adultempire.com/{kind}/{prefix_folder}/1280/{m_id}_{frame_idx}_1280c.jpg"
-        if full_url not in seen:
-            seen.add(full_url)
-            shots.append({"url": full_url, "thumbnail": thumb_url})
+        seen.add(key)
+        shots.append({
+            "thumb": f"https://imgs4cdn.adultempire.com/frame/{mst}?w=1280&tc={offset}",
+            "full": f"https://imgs4cdn.adultempire.com/frame/{mst}?w=3840&tc={offset}",
+        })
 
+    for m in _EA_THUMB_RE.finditer(html or ""):
+        host = m.group(0).split("/n/")[0]
+        gallery, mst, offset = m.group(1), m.group(3), m.group(4)
+        if want and mst != want:
+            continue
+        key = (mst, offset)
+        if key in seen:
+            continue
+        seen.add(key)
+        shots.append({
+            "thumb": f"{host}/n/{gallery}/1280/{mst}_{offset}_1280c.jpg",
+            "full": f"{host}/n/{gallery}/3840/{mst}_{offset}_3840.jpg",
+        })
+
+    # Broad pass too (don't early-return): ADE movie pages mix widths/prefixes.
+    for m in _ANY_CAPS_RE.finditer(html or ""):
+        prefix, gallery, _width, mst, offset = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+        if want and mst != want:
+            continue
+        key = (mst, offset)
+        if key in seen:
+            continue
+        seen.add(key)
+        host = m.group(0).split(f"/{prefix}/")[0]
+        shots.append({
+            "thumb": f"{host}/{prefix}/{gallery}/1280/{mst}_{offset}_1280c.jpg",
+            "full": f"{host}/{prefix}/{gallery}/3840/{mst}_{offset}_3840.jpg",
+        })
     return shots
 
 
 def merge_shots(*lists: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Dedupe screenshot lists (by full URL) preserving order."""
     seen: set[str] = set()
     out: list[dict[str, str]] = []
     for lst in lists:
         for s in lst or []:
-            u = s.get("url") or ""
-            if u and u not in seen:
-                seen.add(u)
+            key = s.get("full") or s.get("thumb") or ""
+            if key and key not in seen:
+                seen.add(key)
                 out.append(s)
     return out
 
 
 def dedupe_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen_ids: set[str] = set()
-    out: list[dict[str, Any]] = []
-    for g in groups:
-        gid = str(g.get("scene_id") or "")
-        label = g.get("label") or ""
-        key = f"{gid}::{label}"
-        if key in seen_ids:
-            continue
-        seen_ids.add(key)
-        out.append(g)
-    return out
-
-
-def extract_more_screens_params(html: str) -> list[dict[str, int]]:
-    """Find data-scene-id / data-total / data-item-id for lazy-loaded screenshot widgets."""
-    out: list[dict[str, int]] = []
-    seen: set[tuple[int, int]] = set()
-    pattern = re.compile(
-        r"""data-item-id=['"](\d+)['"][^>]*data-scene-id=['"](\d+)['"][^>]*data-total=['"](\d+)['"]"""
-        r"""|data-scene-id=['"](\d+)['"][^>]*data-item-id=['"](\d+)['"][^>]*data-total=['"](\d+)['"]"""
-        r"""|data-scene-id=['"](\d+)['"][^>]*data-total=['"](\d+)['"][^>]*data-item-id=['"](\d+)['"]""",
-        re.IGNORECASE,
-    )
-    for m in pattern.finditer(html):
-        groups = [g for g in m.groups() if g is not None]
-        if len(groups) == 3:
-            try:
-                vals = [int(x) for x in groups]
-                k = (vals[0], vals[1])
-                if k not in seen:
-                    seen.add(k)
-                    out.append({"item_id": vals[0], "scene_id": vals[1], "total": vals[2]})
-            except (ValueError, IndexError):
-                continue
-    return out
-
-
-def fetch_full_scene_shots(
-    session: CustomSession,
-    base_host: str,
-    item_id: int | str,
-    scene_id: int | str,
-    total: int = 16,
-) -> list[dict[str, str]]:
-    """Call the AJAX endpoint to fetch all screenshots for a scene."""
-    url = f"{base_host}/item/scene-screenshots/{item_id}/{scene_id}?take={max(total, 16)}&skip=0"
-    try:
-        r = session.get(url, headers={"X-Requested-With": "XMLHttpRequest"}, timeout=10)
-        if r.status_code == 200:
-            return extract_ea_screenshots(r.text, item_id=item_id)
-    except Exception as exc:
-        logger.debug("fetch_full_scene_shots failed for %s/%s: %s", item_id, scene_id, exc)
-    return []
-
-
-def extract_movie_page_blocks(html: str) -> tuple[list[dict[str, str]], dict[str, list[dict[str, str]]]]:
-    """Extract screenshots partitioned by movie-level vs scene-specific blocks."""
-    movie_shots: list[dict[str, str]] = []
-    scene_blocks: dict[str, list[dict[str, str]]] = {}
-
-    scene_chunk_re = re.compile(
-        r"""(?:id=['"]scene-(\d+)['"]|data-scene-id=['"](\d+)['"]|href=['"][^'"]*?/(\d+)/[^'"]*?streaming-scene(?:-video)?\.html)"""
-        r"""([\s\S]*?)(?=(?:id=['"]scene-\d+['"]|data-scene-id=['"]\d+['"]|href=['"][^'"]*?/\d+/[^'"]*?streaming-scene|<footer|</body|$))""",
-        re.IGNORECASE,
-    )
-    for m in scene_chunk_re.finditer(html):
-        sid = m.group(1) or m.group(2) or m.group(3)
-        chunk = m.group(4) or ""
-        shots = extract_ea_screenshots(chunk)
-        if shots:
-            scene_blocks.setdefault(sid, []).extend(shots)
-
-    all_shots = extract_ea_screenshots(html)
-    assigned: set[str] = {s["url"] for shots in scene_blocks.values() for s in shots}
-    for s in all_shots:
-        if s["url"] not in assigned:
-            movie_shots.append(s)
-
-    return movie_shots, scene_blocks
-
-
-def extract_scene_widgets(html: str) -> list[dict[str, str]]:
-    """Extract per-scene preview thumbnails and scene IDs from card widgets."""
-    widgets: list[dict[str, str]] = []
-    for m in _SCENE_WIDGET_RE.finditer(html):
-        sid, img_src = m.groups()
-        widgets.append({"scene_id": sid, "image": upgrade_frame_width(img_src, 3840)})
-
-    card_pattern = re.compile(
-        r'<a[^>]+href="[^"]*?/(\d+)/[^"]*?streaming-scene(?:-video)?\.html"[^>]*>([\s\S]*?)</a>',
-        re.IGNORECASE,
-    )
-    for m in card_pattern.finditer(html):
-        sid, inner = m.groups()
-        imgs = _FRAME_URL_RE_INTERNAL.findall(inner)
-        if imgs:
-            best_img = max(imgs, key=frame_width_value)
-            widgets.append({"scene_id": sid, "image": upgrade_frame_width(best_img, 3840)})
-
+    """Drop cross-group duplicate stills (by full URL), keeping first occurrence."""
     seen: set[str] = set()
-    out: list[dict[str, str]] = []
-    for w in widgets:
-        if w["scene_id"] not in seen:
-            seen.add(w["scene_id"])
-            out.append(w)
-    return out
-
-
-_FRAME_URL_RE_INTERNAL = re.compile(
-    r"https?://imgs\d?cdn\.adultempire\.com/frame/\d+\?[^\s\"\'\<\>]*?tc=\d+",
-    re.IGNORECASE,
-)
-
-
-def build_groups_from_page_blocks(
-    movie_shots: list[dict[str, str]],
-    scene_blocks: dict[str, list[dict[str, str]]],
-    scenes: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    groups: list[dict[str, Any]] = []
-
-    scene_map: dict[str, dict[str, Any]] = {}
-    for sc in scenes:
-        scene_map[str(sc.get("id") or "")] = sc
-
-    for sid, shots in scene_blocks.items():
-        sc = scene_map.get(sid, {})
-        label = f"Scene {sc.get('n', '')}: {sc.get('title', '')}".strip(": ") if sc else f"Scene {sid}"
-        groups.append({
-            "scene_id": sid,
-            "label": label,
-            "scene_number": sc.get("n"),
-            "screenshots": shots,
-        })
-
-    if movie_shots:
-        groups.insert(0, {
-            "scene_id": None,
-            "label": "Movie / Gallery",
-            "scene_number": None,
-            "screenshots": movie_shots,
-        })
-
+    for g in groups:
+        uniq: list[dict[str, str]] = []
+        for s in g.get("screenshots") or []:
+            key = s.get("full") or s.get("thumb") or ""
+            if key and key not in seen:
+                seen.add(key)
+                uniq.append(s)
+        g["screenshots"] = uniq
     return groups
 
 
-def synth_screenshots(
+def extract_more_screens_params(html: str) -> list[dict[str, int]]:
+    """Parse ShowMoreScreens2017(item, start, end, sceneID, ...) call params."""
+    out: list[dict[str, int]] = []
+    for m in re.finditer(r"ShowMoreScreens2017\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", html or ""):
+        try:
+            out.append({"item": int(m.group(1)), "start": int(m.group(2)),
+                        "end": int(m.group(3)), "scene": int(m.group(4))})
+        except ValueError:
+            continue
+    # Dedupe by scene, keep order
+    seen: set[int] = set()
+    uniq: list[dict[str, int]] = []
+    for p in out:
+        if p["scene"] not in seen:
+            seen.add(p["scene"])
+            uniq.append(p)
+    return uniq
+
+
+def fetch_full_scene_shots(session: CustomSession, base_host: str,
+                            params: list[dict[str, int]]) -> dict[str, list[dict[str, str]]]:
+    """Call /Item/LoadSceneScreenshots per scene; return {sceneID: shots}."""
+    out: dict[str, list[dict[str, str]]] = {}
+    for p in params:
+        try:
+            r = session.get(f"{base_host}/Item/LoadSceneScreenshots",
+                            params={"item": p["item"], "start": p["start"],
+                                    "end": p["end"], "sceneID": p["scene"]},
+                            timeout=20)
+            if r.ok and r.text:
+                shots = extract_ea_screenshots(r.text)
+                if shots:
+                    out[str(p["scene"])] = shots
+                    logger.info("Full stills scene %s: %d", p["scene"], len(shots))
+        except Exception as e:
+            logger.warning("LoadSceneScreenshots failed scene %s: %s", p["scene"], e)
+    return out
+
+
+def extract_movie_page_blocks(html: str) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """Split an ADE/EA movie page into full-list stills + per-scene blocks."""
+    parts = re.split(r'<a name="scene_(\d+)"', html or "")
+    full_shots = extract_ea_screenshots(parts[0]) if parts else []
+    blocks: list[dict[str, Any]] = []
+    for i in range(1, len(parts), 2):
+        clip_id = parts[i]
+        block = parts[i + 1] if i + 1 < len(parts) else ""
+        title_m = re.search(
+            r"/(?:clip|shop)/" + re.escape(clip_id) + r"/[^\"]*?\"[^>]*>(.*?)</a>",
+            block, re.S | re.I,
+        )
+        title = re.sub(r"\s+", " ", html_unescape(title_m.group(1)) if title_m else "").strip()
+        blocks.append({
+            "clip_id": clip_id,
+            "title": title or f"Scene {len(blocks) + 1}",
+            "shots": extract_ea_screenshots(block),
+        })
+    return full_shots, blocks
+
+
+_SCENE_WIDGET_RE = re.compile(
+    r'<article\b[^>]*class="[^"]*\bscene-widget\b[^"]*"[^>]*>(.*?)</article>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def extract_scene_widgets(html: str) -> list[dict[str, str]]:
+    """Parse the scene cards on a movie/VOD page."""
+    widgets: list[dict[str, str]] = []
+    for m in _SCENE_WIDGET_RE.finditer(html or ""):
+        tag, block = m.group(0), m.group(1)
+        sid = re.search(r'data-scene-id="(\d+)"', tag, re.I)
+        if not sid:
+            continue
+        mid = re.search(r'data-master-id="(\d+)"', tag, re.I)
+        ds = re.search(r'data-src="([^"]+)"', block, re.I)
+        if ds and _FRAME_URL_RE.fullmatch(ds.group(1)):
+            frame = ds.group(1)
+        else:
+            frames = _FRAME_URL_RE.findall(block)
+            frame = max(frames, key=_frame_width_value) if frames else ""
+        title_m = re.search(r"<h6[^>]*>(.*?)</h6>", block, re.S | re.I)
+        widgets.append({
+            "scene_id": sid.group(1),
+            "master_id": mid.group(1) if mid else "",
+            "title": re.sub(
+                r"\s+", " ", html_unescape(title_m.group(1)) if title_m else ""
+            ).strip(),
+            "frame": frame,
+        })
+    return widgets
+
+
+def build_groups_from_page_blocks(
     item_detail: dict[str, Any],
-    scene_id: str | int | None = None,
-    movie_id: str | int | None = None,
-) -> list[dict[str, str]]:
-    """Fallback: synthesize frame CDN URLs using tc offsets."""
-    m_id = str(movie_id or item_detail.get("id") or item_detail.get("item_id") or "")
-    if not m_id:
+    full_shots: list[dict[str, str]],
+    blocks: list[dict[str, Any]],
+    combined_limit: int = 40,
+) -> list[dict[str, Any]] | None:
+    """Build screenshot groups from real movie-page scene blocks."""
+    if not blocks:
+        return None
+    scenes = _scenes_info(item_detail)
+    total_end = max((s["end_s"] for s in scenes), default=0)
+    combined = list(full_shots) or synth_screenshots(item_detail, None, limit=combined_limit)
+    groups: list[dict[str, Any]] = [{
+        "key": "all",
+        "scene_id": None,
+        "n": 0,
+        "title": "Full movie (combined)",
+        "start_s": 0,
+        "end_s": total_end,
+        "screenshots": combined,
+    }]
+    for i, b in enumerate(blocks):
+        sc = scenes[i] if i < len(scenes) else {}
+        groups.append({
+            "key": f"scene-{i + 1}",
+            "scene_id": sc.get("id") or b.get("clip_id"),
+            "n": i + 1,
+            "title": b.get("title") or sc.get("title") or f"Scene {i + 1}",
+            "start_s": sc.get("start_s"),
+            "end_s": sc.get("end_s"),
+            "screenshots": b.get("shots") or [],
+        })
+    return groups
+
+
+def synth_screenshots(item_detail: dict[str, Any], scene_id: str | int | None = None, limit: int = 40) -> list[dict[str, str]]:
+    """Synthesize screenshot URLs from verify data (works for any ADE/EA title)."""
+    master = str(item_detail.get("master_id") or "")
+    if not master.isdigit():
+        return []
+    frames = item_detail.get("frames") or {}
+    try:
+        interval = max(int(frames.get("interval") or 10), 10)
+    except (TypeError, ValueError):
+        interval = 10
+
+    start, end = 0, 0
+    if scene_id:
+        for sc in item_detail.get("scenes", []):
+            if str(sc.get("id")) == str(scene_id):
+                start, end = int(sc.get("start_seconds") or 0), int(sc.get("end_seconds") or 0)
+                break
+    else:
+        scenes = item_detail.get("scenes", [])
+        if scenes:
+            end = int(scenes[-1].get("end_seconds") or 0)
+    if end <= start:
         return []
 
-    target_scene: dict[str, Any] | None = None
-    if scene_id:
-        for s in item_detail.get("scenes", []) or []:
-            if str(s.get("id")) == str(scene_id):
-                target_scene = s
-                break
-
-    if target_scene:
-        start = int(target_scene.get("start_seconds") or 0)
-        end = int(target_scene.get("end_seconds") or (start + 600))
-    else:
-        start = 0
-        end = int(item_detail.get("length_seconds") or 7200)
-
-    duration = max(end - start, 60)
-    num_samples = 12
-    step = max(duration // (num_samples + 1), 5)
-    tcs = [start + step * i for i in range(1, num_samples + 1)]
-
+    duration = end - start
+    step = max(interval, round(duration / limit / interval) * interval or interval)
+    gallery = master[-4:]
     shots: list[dict[str, str]] = []
-    for tc in tcs:
-        full = f"https://imgs1cdn.adultempire.com/frame/{m_id}?tc={tc}&w=3840"
-        thumb = f"https://imgs1cdn.adultempire.com/frame/{m_id}?tc={tc}&w=320"
-        shots.append({"url": full, "thumbnail": thumb})
+    offset = (start // step) * step
+    while offset <= end and len(shots) < limit:
+        tag = f"{offset:05d}"
+        shots.append({
+            "thumb": f"https://caps1cdn.adultempire.com/n/{gallery}/1280/{master}_{tag}_1280c.jpg",
+            "full": f"https://caps1cdn.adultempire.com/n/{gallery}/3840/{master}_{tag}_3840.jpg",
+        })
+        offset += step
     return shots
 
 
 def shot_offset_seconds(shot: dict[str, str]) -> int | None:
-    u = shot.get("url") or ""
-    m = _FRAME_RE.search(u)
+    """Parse the frame offset (seconds) out of a caps or frame CDN URL."""
+    url = (shot.get("full") or "") + " " + (shot.get("thumb") or "")
+    m = re.search(r"[?&]tc=(\d+)", url)
     if m:
         try:
-            return int(m.group(2))
-        except ValueError:
-            return None
-    return None
+            return int(m.group(1))
+        except (TypeError, ValueError):
+            pass
+    m = re.search(r"_(\d{4,6})_(?:10|320|1280c|3840)\.jpg", url)
+    if not m:
+        m = re.search(r"_(\d+)_", shot.get("full") or shot.get("thumb") or "")
+    try:
+        return int(m.group(1)) if m else None
+    except (TypeError, ValueError):
+        return None
 
 
-def caps_probe_info(
-    shots: list[dict[str, str]],
-    start: int = 0,
-    end: int = 0,
-) -> dict[str, Any]:
-    return {
-        "count": len(shots),
-        "start_offset_s": start,
-        "end_offset_s": end,
-        "has_highres": any("1280" in s.get("url", "") or "3840" in s.get("url", "") for s in shots),
-    }
+def caps_probe_info(shots: list[dict[str, str]], start: int = 0,
+                     end: int | None = None, step: int = 10) -> dict[str, Any] | None:
+    """Describe the full caps range behind a movie (for the UI opt-in toggle)."""
+    master = gallery = prefix = ""
+    for s in shots or []:
+        m = re.search(r"/([a-z])/(\d+)/\d+/(\d+)_\d+_\d+[a-z]?\.jpg",
+                      s.get("full") or s.get("thumb") or "")
+        if m:
+            prefix, gallery, master = m.group(1), m.group(2), m.group(3)
+            break
+    if not master:
+        return None
+    if end is None:
+        offs = [o for o in (shot_offset_seconds(s) for s in shots) if o is not None]
+        end = max(offs) if offs else 0
+    if end <= start:
+        return None
+    return {"prefix": prefix, "gallery": gallery, "master": master,
+            "start": start, "end": end, "step": step,
+            "count": (end - start) // step + 1}
 
 
 def build_screenshot_groups(
     item_detail: dict[str, Any],
-    page_html: str,
-    scene_id: str | int | None = None,
-    session: CustomSession | None = None,
-    base_url: str = "",
+    html_shots: list[dict[str, str]] | None = None,
+    per_scene_limit: int = 30,
+    combined_limit: int = 40,
 ) -> list[dict[str, Any]]:
-    """Assemble screenshot groups for UI consumption."""
-    from .metadata import scenes_info
+    """Group screenshots per scene + a combined (full-movie) group."""
+    scenes = _scenes_info(item_detail)
+    if not scenes:
+        return []
+    html_shots = html_shots or []
 
-    scenes = scenes_info(item_detail)
-    movie_shots, scene_blocks = extract_movie_page_blocks(page_html)
+    # Bucket HTML thumbs by scene boundaries (offset seconds within [start, end]).
+    buckets: dict[str, list[dict[str, str]]] = {s["id"]: [] for s in scenes if s["id"]}
+    leftover: list[dict[str, str]] = []
+    for shot in html_shots:
+        off = shot_offset_seconds(shot)
+        placed = False
+        if off is not None:
+            for s in scenes:
+                if s["start_s"] <= off <= s["end_s"]:
+                    if s["id"]:
+                        buckets[s["id"]].append(shot)
+                    placed = True
+                    break
+        if not placed:
+            leftover.append(shot)
 
-    # For Elegant Angel, probe full scene screenshots if we have session and base_url
-    if session and base_url:
-        parsed_base = f"{CustomSession.__name__}"  # just dummy reference
-        from urllib.parse import urlparse
-        p = urlparse(base_url)
-        base_host = f"{p.scheme}://{p.netloc}"
-        params = extract_more_screens_params(page_html)
-        for prm in params:
-            sid = str(prm["scene_id"])
-            if sid not in scene_blocks or len(scene_blocks[sid]) < prm["total"]:
-                extra = fetch_full_scene_shots(session, base_host, prm["item_id"], sid, prm["total"])
-                if extra:
-                    scene_blocks[sid] = merge_shots(scene_blocks.get(sid), extra)
-
-    groups = build_groups_from_page_blocks(movie_shots, scene_blocks, scenes)
-
-    # If single scene requested and no screenshots found, try direct extraction or synthesis
-    if scene_id and not any(g.get("screenshots") for g in groups):
-        direct = extract_ea_screenshots(page_html, master=scene_id, item_id=item_detail.get("id"))
-        if not direct:
-            direct = synth_screenshots(item_detail, scene_id=scene_id)
-        if direct:
-            groups.append({
-                "scene_id": str(scene_id),
-                "label": f"Scene {scene_id}",
-                "scene_number": None,
-                "screenshots": direct,
-            })
-
-    return dedupe_groups(groups)
+    groups: list[dict[str, Any]] = []
+    total_end = max((s["end_s"] for s in scenes), default=0)
+    combined = synth_screenshots(item_detail, None, limit=combined_limit)
+    if not combined and html_shots:
+        combined = list(html_shots)
+    groups.append({
+        "key": "all",
+        "scene_id": None,
+        "n": 0,
+        "title": "Full movie (combined)",
+        "start_s": 0,
+        "end_s": total_end,
+        "screenshots": combined,
+    })
+    for s in scenes:
+        sid = s["id"]
+        bucketed = buckets.get(sid, []) if html_shots else []
+        shots = bucketed if bucketed else synth_screenshots(item_detail, sid, limit=per_scene_limit)
+        groups.append({
+            "key": f"scene-{s['n']}",
+            "scene_id": sid,
+            "n": s["n"],
+            "title": s["title"] or f"Scene {s['n']}",
+            "start_s": s["start_s"],
+            "end_s": s["end_s"],
+            "screenshots": shots,
+        })
+    return groups

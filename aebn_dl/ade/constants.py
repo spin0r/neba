@@ -70,19 +70,18 @@ _PLAYER_INIT_RE = re.compile(
     r"site:\s*['\"]([^'\"]+)['\"][^}]*"
     r"key:\s*['\"]([^'\"]+)['\"][^}]*"
     r"timestamp:\s*['\"]([^'\"]+)['\"][^}]*"
-    r"(?:sig:\s*['\"]([^'\"]+)['\"][^}]*)?"
-    r"(?:type:\s*['\"]([^'\"]+)['\"][^}]*)?"
-    r"(?:scene_id:\s*['\"]?(\d+)['\"]?[^}]*)?",
+    r"sig:\s*['\"]([^'\"]+)['\"]",
     re.DOTALL,
 )
 
+# Simpler individual param extraction as fallback
 _ITEM_ID_RE = re.compile(r"['\"]?(?:item_id|item)['\"]?\s*:\s*['\"]?(\d+)['\"]?", re.IGNORECASE)
+_SCENE_ID_RE = re.compile(r"['\"]?(?:scene_id|scene)['\"]?\s*:\s*['\"]?(\d+)['\"]?", re.IGNORECASE)
+_TYPE_RE = re.compile(r"['\"]?type['\"]?\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _SITE_RE = re.compile(r"['\"]?site['\"]?\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _KEY_RE = re.compile(r"['\"]?key['\"]?\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _TIMESTAMP_RE = re.compile(r"['\"]?timestamp['\"]?\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 _SIG_RE = re.compile(r"['\"]?sig['\"]?\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
-_TYPE_RE = re.compile(r"['\"]?type['\"]?\s*:\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
-_SCENE_ID_RE = re.compile(r"['\"]?scene_id['\"]?\s*:\s*['\"]?(\d+)['\"]?", re.IGNORECASE)
 _SCENE_WIDGET_RE = re.compile(r'data-scene-id="(\d+)"[^>]*>.*?<img[^>]+src="([^">]+)"', re.DOTALL | re.IGNORECASE)
 
 ADE_TRAILER_RE = re.compile(

@@ -57,6 +57,8 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
         raise ValueError("Could not find movie ID on clip page")
 
     vod_item_id = movie_ids[0]
+    clip_slug_m = ADE_CLIP_RE.search(url)
+    clip_slug = clip_slug_m.group(2) if clip_slug_m else None
 
     # Try to get player params from the parent movie's VOD page
     movie_slug_match = re.search(r'href="/(\d+)/([^"]+?)-porn-videos\.html"', html)
@@ -88,7 +90,13 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
                     raw_title = item_detail.get("title") or item_detail.get("vod_title") or "Unknown"
                     title = resolve_ade_title(raw_title, item_detail, scene_id)
                     dur_s = extract_ade_duration_seconds(item_detail, scene_id, result.get("playlist_url", ""))
-                    scene_thumb = extract_scene_thumbnail(html, target_tc=url_tc)
+                    scene_thumb = extract_scene_thumbnail(
+                        html,
+                        target_tc=url_tc,
+                        item_id=params["item_id"],
+                        scene_id=scene_id,
+                        slug=clip_slug,
+                    )
                     return {
                         "title": title,
                         "item_id": params["item_id"],
@@ -117,7 +125,13 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
     raw_title = item_detail.get("title") or item_detail.get("vod_title") or "Preview"
     title = resolve_ade_title(raw_title, item_detail, scene_id)
     dur_s = extract_ade_duration_seconds(item_detail, scene_id, result.get("playlist_url", ""))
-    scene_thumb = extract_scene_thumbnail(html, target_tc=url_tc)
+    scene_thumb = extract_scene_thumbnail(
+        html,
+        target_tc=url_tc,
+        item_id=vod_item_id,
+        scene_id=scene_id,
+        slug=clip_slug,
+    )
 
     return {
         "title": title,
@@ -244,7 +258,12 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                             logger.info("Scene thumb (frame) from parent movie scene %s: tc=%s (w=1280)",
                                         mw.get("scene_id"), tc_m.group(1) if tc_m else "?")
                             if not scene_thumb:
-                                scene_thumb = extract_scene_backdrop(html) or frame_thumb
+                                scene_thumb = extract_scene_backdrop(
+                                    html,
+                                    item_id=params.get("item_id"),
+                                    scene_id=cur_scene_id,
+                                    slug=clip_match.group(2) if clip_match else None,
+                                ) or frame_thumb
 
                         _mfull, mblocks = extract_movie_page_blocks(mresp.text)
                         blk = next((b for b in mblocks if str(b.get("clip_id")) == str(cur_scene_id)), None)
@@ -280,7 +299,13 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
             except Exception as e:
                 logger.warning("Parent-movie scene stills failed: %s", e)
 
-            scene_thumb = scene_thumb or extract_scene_thumbnail(html, target_tc=url_tc)
+            scene_thumb = scene_thumb or extract_scene_thumbnail(
+                html,
+                target_tc=url_tc,
+                item_id=params.get("item_id"),
+                scene_id=cur_scene_id,
+                slug=clip_match.group(2) if clip_match else None,
+            )
             return {
                 "title": title,
                 "movie_title": raw_movie_title,
@@ -455,7 +480,13 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         or build_screenshot_groups(item_detail, ea_shots or None)
         or []
     )
-    scene_thumb = extract_scene_thumbnail(html, target_tc=url_tc)
+    scene_thumb = extract_scene_thumbnail(
+        html,
+        target_tc=url_tc,
+        item_id=vod_item_id,
+        scene_id=scene_id,
+        slug=clip_slug,
+    )
     return {
         "title": title,
         "movie_title": raw_movie_title,
