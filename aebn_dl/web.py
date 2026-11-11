@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from html import unescape as html_unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
@@ -473,11 +473,15 @@ def _parse_m3u8_variants(master_url: str, cookies: str = "") -> dict[int, str]:
     return variants
 
 
+def _visible_heights(heights: Iterable[int]) -> list[int]:
+    """Show HD variants down to 720p; if the title is SD-only, show them all."""
+    hs = sorted({int(h) for h in heights if h}, reverse=True)
+    hd = [h for h in hs if h >= 720]
+    return hd or hs
+
+
 def _pick_preferred(variants: dict[int, str]) -> list[tuple[int, str]]:
-    picked = [(h, variants[h]) for h in (2160, 1080, 720, 480, 360, 240, 144) if h in variants]
-    seen = {h for h, _ in picked}
-    picked += [(h, variants[h]) for h in sorted(variants, reverse=True) if h not in seen]
-    return picked
+    return [(h, variants[h]) for h in _visible_heights(variants)]
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +589,14 @@ def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
          "start_s": s.get("start_s"), "end_s": s.get("end_s")}
         for i, s in enumerate(ade_scenes)
     ]
+    # Scene hover preview (CDN-hosted, CORS-enabled) for the browser player.
+    # No server-side fetch/download; the frontend loads the HLS directly.
+    preview_url = None
+    if result.get("item_id") and scene_id:
+        preview_url = (
+            "https://trailer.adultempire.com/hls/previewscene/"
+            f"{result['item_id']}/{scene_id}/master.m3u8"
+        )
     return {
         "site": site,
         "studio": html_unescape((item_detail.get("studio") or {}).get("name", "") if isinstance(item_detail.get("studio"), dict) else "Unknown"),
@@ -602,6 +614,8 @@ def _extract_ade(url: str, cookies: str) -> dict[str, Any]:
         "screenshots": result.get("screenshots", []),
         "screenshot_groups": result.get("screenshot_groups", []),
         "caps_probe": result.get("caps_probe"),
+        "scene_thumb": result.get("scene_thumb"),
+        "preview_url": preview_url,
         "scenes": info_scenes,
         "scene_count": len(info_scenes) or None,
         "performers": [],

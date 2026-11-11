@@ -9,7 +9,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from telegram import Bot, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
@@ -488,18 +488,16 @@ def _parse_m3u8_variants(master_url: str, cookies: str = "") -> dict[int, str]:
     return variants
 
 
+def _visible_heights(heights: Iterable[int]) -> list[int]:
+    """Show HD variants down to 720p; if the title is SD-only, show them all."""
+    hs = sorted({int(h) for h in heights if h}, reverse=True)
+    hd = [h for h in hs if h >= 720]
+    return hd or hs
+
+
 def _pick_preferred_links(variants: dict[int, str]) -> list[tuple[int, str]]:
-    """Return links sorted by preference: 2160 > 1080 > 720 > rest descending."""
-    pref_order = [2160, 1080, 720, 480, 360, 240, 144]
-    picked: list[tuple[int, str]] = []
-    for h in pref_order:
-        if h in variants:
-            picked.append((h, variants[h]))
-    # add any remaining not in pref_order (higher first)
-    for h in sorted(variants, reverse=True):
-        if h not in {p[0] for p in picked}:
-            picked.append((h, variants[h]))
-    return picked
+    """Return links sorted highest first, hiding SD variants when HD exists."""
+    return [(h, variants[h]) for h in _visible_heights(variants)]
 
 
 def _format_duration(duration_s: int | None) -> str:

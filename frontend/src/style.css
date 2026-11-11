@@ -356,6 +356,43 @@ body::after {
 .hero-card:active { transform: translate(3px, 3px); box-shadow: 2px 2px 0 var(--ink); }
 .hero-card.selected { background: var(--violet); box-shadow: 7px 7px 0 var(--ink); }
 
+.hero-thumb-side {
+  width: 260px;
+  min-width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  border-right: var(--line);
+  position: relative;
+  overflow: hidden;
+  background: var(--ink);
+}
+.hero-thumb-img {
+  width: 100%;
+  height: 100%;
+  /* 1920x1080 source: show the whole frame instead of cropping it */
+  object-fit: contain;
+  display: block;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+.hero-thumb-side:hover .hero-thumb-img {
+  transform: scale(1.05);
+}
+.hero-thumb-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  padding: 2px 5px;
+  background: var(--ink);
+  color: var(--yellow);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--yellow);
+  box-shadow: 1px 1px 0 var(--ink);
+}
+
 .hero-half {
   flex: 1;
   display: flex;
@@ -1161,6 +1198,101 @@ body::after {
 }
 .viewer-stage img.loading { opacity: 0.3; }
 
+/* HLS scene preview (720p, loaded straight from the CDN) */
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 420;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #0d0d0d;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  outline: none;
+  animation: previewOverlayIn 0.18s ease both;
+}
+/* Dim the thumbnail background so it doesn't flash bright behind the player */
+.preview-overlay::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(13, 13, 13, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 0;
+  pointer-events: none;
+}
+/* Ensure the overlay's children sit above the dimming layer */
+.preview-overlay > * { position: relative; z-index: 1; }
+@keyframes previewOverlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.preview-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+}
+.preview-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.preview-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.preview-badge {
+  padding: 5px 9px;
+  background: var(--lime);
+  border: 2px solid var(--ink);
+  box-shadow: 2px 2px 0 var(--pink);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.preview-player {
+  width: min(1200px, 92vw);
+  height: min(675px, 84vh);
+  background: #000;
+  border: 4px solid var(--paper);
+  box-shadow: 10px 10px 0 rgba(0, 0, 0, 0.65);
+}
+.preview-player .dplayer {
+  width: 100%;
+  height: 100%;
+}
+.preview-player .dplayer-video-wrap video {
+  object-fit: contain;
+}
+/* DPlayer adds its state classes to the container we pass in, so the
+   state selectors combine with .preview-player on the same element. */
+.preview-player.dplayer-loading .dplayer-controller,
+.preview-player.dplayer-loading .dplayer-controller-mask,
+.preview-player.dplayer-loading .dplayer-bezel {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+/* DPlayer flashes a big play badge when autoplay kicks in — skip it. */
+.preview-player.dplayer-playing .dplayer-bezel {
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
 .viewer-arrow {
   position: absolute;
   top: 50%;
@@ -1228,6 +1360,14 @@ body::after {
   .mode-hint { font-size: 9px; }
 
   .hero-card { flex-direction: column; margin: 8px 12px 12px; }
+  .hero-thumb-side {
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    aspect-ratio: 16 / 9;
+    border-right: 0;
+    border-bottom: var(--line);
+  }
   .hero-divider { width: auto; height: 3px; margin: 0 16px; }
   .hero-arrow { transform: translate(-50%, -50%) rotate(90deg); }
   .hero-half { padding: 18px 14px; }

@@ -72,6 +72,18 @@ _ANY_CAPS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Adult Empire / DVDErotik frame CDN URL pattern:
+_FRAME_RE = re.compile(
+    r"https?://imgs\d?cdn\.adultempire\.com/frame/(\d+)\?[^\s\"\'\<\>]*?tc=(\d+)",
+    re.IGNORECASE,
+)
+
+# Any frame URL (used to pick the largest preview from a movie scene card)
+_FRAME_URL_RE = re.compile(
+    r"https?://imgs\d?cdn\.adultempire\.com/frame/\d+\?[^\s\"\'\<\>]*?tc=\d+",
+    re.IGNORECASE,
+)
+
 # Extract player init params from HTML — handles both item/item_id and scene/scene_id
 _PLAYER_INIT_RE = re.compile(
     r"AEVideoPlayer\([^)]*\{[^}]*"
@@ -399,6 +411,39 @@ def resolve_ade_title(    base_title: str,
     return base_title
 
 
+def _extract_scene_thumbnail(html: str, target_tc: str | int | None = None) -> str | None:
+    """Extract full-size scene thumbnail (large image w=3840) from scene/clip HTML."""
+    if target_tc is not None:
+        tc_m = re.search(
+            r'https?://imgs\d?cdn\.adultempire\.com/frame/(\d+)\?[^\s\"\'\<\>]*?tc=' + re.escape(str(target_tc)),
+            html or "",
+            re.I,
+        )
+        if tc_m:
+            url = tc_m.group(0)
+            if re.search(r'[?&]w=\d+', url):
+                return re.sub(r'([?&]w=)\d+', r'\g<1>3840', url)
+            sep = '&' if '?' in url else '?'
+            return f"{url}{sep}w=3840"
+
+    patterns = [
+        r'<meta\s+property=[\'\"]og:image[\'\"]\s+content=[\'\"]([^\'\"]*?/frame/\d+[^\'\"]*)[\'\"]',
+        r'<link\s+rel=[\'\"]image_src[\'\"]\s+href=[\'\"]([^\'\"]*?/frame/\d+[^\'\"]*)[\'\"]',
+        r'[\'\"]thumbnailUrl[\'\"]\s*:\s*[\'\"]([^\'\"]*?/frame/\d+[^\'\"]*)[\'\"]',
+        r'addToVODCart\([^)]*?[\'\"](https?://[^\'\"]*?/frame/\d+[^\'\"]*)[\'\"]',
+        r'https?://imgs\d?cdn\.adultempire\.com/frame/\d+\?[^\s\"\'\<\>]*?tc=\d+',
+    ]
+    for pat in patterns:
+        m = re.search(pat, html or "", re.I)
+        if m:
+            url = m.group(1) if m.lastindex else m.group(0)
+            if re.search(r'[?&]w=\d+', url):
+                return re.sub(r'([?&]w=)\d+', r'\g<1>3840', url)
+            sep = '&' if '?' in url else '?'
+            return f"{url}{sep}w=3840"
+    return None
+
+
 def _extract_ea_screenshots(html: str, master: str | int | None = None) -> list[dict[str, str]]:
     """Extract caps stills, optionally filtered to one master id.
 
@@ -408,6 +453,19 @@ def _extract_ea_screenshots(html: str, master: str | int | None = None) -> list[
     want = str(master) if master not in (None, "") else ""
     seen: set[tuple[str, ...]] = set()
     shots: list[dict[str, str]] = []
+    # Frame images (e.g. DVDErotik / ADE scene pages)
+    for m in _FRAME_RE.finditer(html or ""):
+        mst, offset = m.group(1), m.group(2)
+        if want and mst != want:
+            continue
+        key = (mst, offset)
+        if key in seen:
+            continue
+        seen.add(key)
+        shots.append({
+            "thumb": f"https://imgs4cdn.adultempire.com/frame/{mst}?w=1280&tc={offset}",
+            "full": f"https://imgs4cdn.adultempire.com/frame/{mst}?w=3840&tc={offset}",
+        })
     for m in _EA_THUMB_RE.finditer(html or ""):
         host = m.group(0).split("/n/")[0]
         gallery, mst, offset = m.group(1), m.group(3), m.group(4)
@@ -543,6 +601,60 @@ def _extract_movie_page_blocks(html: str) -> tuple[list[dict[str, str]], list[di
     return full_shots, blocks
 
 
+_SCENE_WIDGET_RE = re.compile(
+    r'<article\b[^>]*class="[^"]*\bscene-widget\b[^"]*"[^>]*>(.*?)</article>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _frame_width_value(url: str) -> int:
+    m = re.search(r"[?&]w=(\d+)", url or "")
+    return int(m.group(1)) if m else 0
+
+
+def _upgrade_frame_width(url: str, width: int = 3840) -> str:
+    """Set the CDN frame width (e.g. w=750 -> w=3840) while keeping tc."""
+    if not url:
+        return url
+    if re.search(r"([?&]w=)\d+", url):
+        return re.sub(r"([?&]w=)\d+", rf"\g<1>{width}", url)
+    return f"{url}{'&' if '?' in url else '?'}w={width}"
+
+
+def _extract_scene_widgets(html: str) -> list[dict[str, str]]:
+    """Parse the scene cards on a movie/VOD page.
+
+    DVDErotik/ADE store pages render one ``<article class="scene-widget">``
+    per scene with ``data-scene-id`` plus a preview frame image. That frame
+    (``/frame/{master}?w=750&tc=NNNN``) is the scene's representative still
+    and the right thumb for a clip's manifest.
+    """
+    widgets: list[dict[str, str]] = []
+    for m in _SCENE_WIDGET_RE.finditer(html or ""):
+        tag, block = m.group(0), m.group(1)
+        sid = re.search(r'data-scene-id="(\d+)"', tag, re.I)
+        if not sid:
+            continue
+        mid = re.search(r'data-master-id="(\d+)"', tag, re.I)
+        # Prefer the card's data-src (w=750); fall back to the largest frame.
+        ds = re.search(r'data-src="([^"]+)"', block, re.I)
+        if ds and _FRAME_URL_RE.fullmatch(ds.group(1)):
+            frame = ds.group(1)
+        else:
+            frames = _FRAME_URL_RE.findall(block)
+            frame = max(frames, key=_frame_width_value) if frames else ""
+        title_m = re.search(r"<h6[^>]*>(.*?)</h6>", block, re.S | re.I)
+        widgets.append({
+            "scene_id": sid.group(1),
+            "master_id": mid.group(1) if mid else "",
+            "title": re.sub(
+                r"\s+", " ", html_unescape(title_m.group(1)) if title_m else ""
+            ).strip(),
+            "frame": frame,
+        })
+    return widgets
+
+
 def _build_groups_from_page_blocks(
     item_detail: dict[str, Any],
     full_shots: list[dict[str, str]],
@@ -650,8 +762,15 @@ def _scenes_info(item_detail: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _shot_offset_seconds(shot: dict[str, str]) -> int | None:
-    """Parse the frame offset (seconds) out of a caps CDN URL."""
-    m = re.search(r"_(\d{4,6})_(?:10|320|1280c|3840)\.jpg", (shot.get("full") or "") + " " + (shot.get("thumb") or ""))
+    """Parse the frame offset (seconds) out of a caps or frame CDN URL."""
+    url = (shot.get("full") or "") + " " + (shot.get("thumb") or "")
+    m = re.search(r"[?&]tc=(\d+)", url)
+    if m:
+        try:
+            return int(m.group(1))
+        except (TypeError, ValueError):
+            pass
+    m = re.search(r"_(\d{4,6})_(?:10|320|1280c|3840)\.jpg", url)
     if not m:
         m = re.search(r"_(\d+)_", shot.get("full") or shot.get("thumb") or "")
     try:
@@ -786,6 +905,8 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
 
     scene_id = None
     vod_item_id = None
+    url_tc_m = re.search(r'[?&]tc=(\d+)', url)
+    url_tc = url_tc_m.group(1) if url_tc_m else None
     if clip_match:
         scene_id = clip_match.group(1)
     elif ea_scene_match:
@@ -840,18 +961,37 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
             flat_shots = real_shots or _extract_ea_screenshots(html) or _synth_screenshots(item_detail, cur_scene_id)
             scene_groups = _build_screenshot_groups(item_detail, _extract_ea_screenshots(html) or None)
             caps_probe = None
+            scene_thumb = None
             # Parent-movie flow: the clip page's own stills mix in related
             # titles, so resolve the parent movie page (clip → movie link),
             # find this exact scene block (preview stills) plus its More
             # Screenshots full set.
             try:
-                pm = re.search(r'href="(/(\d+)/([^"]+?)-porn-videos\.html)"', html or "")
+                # Skip category links like /2813/category/...-porn-videos.html —
+                # they match the movie pattern but are unrelated listing pages.
+                pm = re.search(r'href="(/(\d+)/(?!category/)([^"]+?)-porn-videos\.html)"', html or "")
                 if pm and cur_scene_id:
                     u = urlparse(url)
                     movie_url = f"{u.scheme or 'https'}://{u.netloc or 'www.adultdvdempire.com'}{pm.group(1)}"
                     logger.info("Clip parent movie page: %s", movie_url)
                     mresp = session.get(movie_url, timeout=20)
                     if mresp.ok and mresp.text:
+                        # The movie page's scene cards carry the scene's own
+                        # preview frame (w=750&tc=NNNN) — the right manifest
+                        # thumb for a clip. Match by scene id, then by title.
+                        widgets = _extract_scene_widgets(mresp.text)
+                        mw = next((w for w in widgets
+                                   if w.get("scene_id") == str(cur_scene_id)), None)
+                        if not mw and scene_title:
+                            want = re.sub(r"\W+", " ", scene_title).strip().lower()
+                            mw = next((w for w in widgets
+                                       if re.sub(r"\W+", " ", w.get("title", "")).strip().lower() == want),
+                                      None)
+                        if mw and mw.get("frame"):
+                            scene_thumb = _upgrade_frame_width(mw["frame"], 3840)
+                            tc_m = re.search(r"[?&]tc=(\d+)", mw["frame"])
+                            logger.info("Scene thumb from parent movie scene %s: tc=%s (w=3840)",
+                                        mw.get("scene_id"), tc_m.group(1) if tc_m else "?")
                         _mfull, mblocks = _extract_movie_page_blocks(mresp.text)
                         blk = next((b for b in mblocks
                                     if str(b.get("clip_id")) == str(cur_scene_id)), None)
@@ -889,6 +1029,9 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                                             cur_scene_id, len(scene_shots))
             except Exception as e:
                 logger.warning("Parent-movie scene stills failed: %s", e)
+            # Fall back to the clip page's own frame when the movie page did
+            # not yield a scene-specific preview.
+            scene_thumb = scene_thumb or _extract_scene_thumbnail(html, target_tc=url_tc)
             return {
                 "title": title,
                 "movie_title": raw_movie_title,
@@ -906,6 +1049,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                 "screenshot_groups": scene_groups,
                 "caps_probe": caps_probe,
                 "scenes": _scenes_info(item_detail),
+                "scene_thumb": scene_thumb,
             }
         # Not authorized for the VOD — the free preview may still be available.
         # If that fails too, explain the authorization problem instead of a
@@ -1083,6 +1227,7 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         or _build_screenshot_groups(item_detail, ea_shots or None)
         or []
     )
+    scene_thumb = _extract_scene_thumbnail(html, target_tc=url_tc)
     return {
         "title": title,
         "movie_title": raw_movie_title,
@@ -1100,11 +1245,14 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
         "screenshot_groups": groups,
         "caps_probe": caps_probe,
         "scenes": _scenes_info(item_detail),
+        "scene_thumb": scene_thumb,
     }
 
 
 def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str | None = None) -> dict[str, Any]:
     """Fallback: preview trailer for clip when VOD not authorized."""
+    url_tc_m = re.search(r"[?&]tc=(\d+)", url)
+    url_tc = url_tc_m.group(1) if url_tc_m else None
     if html is None:
         resp = session.get(url)
         resp.raise_for_status()
@@ -1150,6 +1298,7 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
                     raw_title = item_detail.get("title") or item_detail.get("vod_title") or "Unknown"
                     title = resolve_ade_title(raw_title, item_detail, scene_id)
                     dur_s = extract_ade_duration_seconds(item_detail, scene_id, result.get("playlist_url", ""))
+                    scene_thumb = _extract_scene_thumbnail(html, target_tc=url_tc)
                     return {
                         "title": title,
                         "item_id": params["item_id"],
@@ -1161,6 +1310,7 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
                         "is_authorized": result.get("is_authorized", False),
                         "item_detail": item_detail,
                         "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
+                        "scene_thumb": scene_thumb,
                     }
 
     # Fallback: use preview
@@ -1178,6 +1328,7 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
     title = resolve_ade_title(raw_title, item_detail, scene_id)
     dur_s = extract_ade_duration_seconds(item_detail, scene_id, result.get("playlist_url", ""))
 
+    scene_thumb = _extract_scene_thumbnail(html, target_tc=url_tc)
     return {
         "title": title,
         "item_id": vod_item_id,
@@ -1189,6 +1340,7 @@ def _get_clip_preview(session: CustomSession, scene_id: str, url: str, html: str
         "is_authorized": result.get("is_authorized", False),
         "item_detail": item_detail,
         "ppm_remaining": result.get("customer_ppm_time_remaining_free", 0),
+        "scene_thumb": scene_thumb,
     }
 
 

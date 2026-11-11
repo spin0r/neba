@@ -4,6 +4,7 @@ import { api, AuthError } from './api';
 import type { ExtractData } from './api';
 import { $, esc, copyText, fmtRes } from './ui';
 import { openViewer } from './viewer';
+import { openPreview } from './preview';
 
 export type Mode = 'manifest' | 'info' | 'covers' | 'screenshots';
 
@@ -235,7 +236,7 @@ function renderManifest(d: ExtractData): void {
   const heroRight = best
     ? `<div class="hero-value">${best.height}p</div><div class="hero-sub">best stream · click to copy</div><div class="hero-pill">${esc(
         d.duration || '',
-      )} · ${esc(fmtRes(d.resolutions))}</div>`
+      )} · ${esc(fmtRes(links.map((l) => l.height)))}</div>`
     : `<div class="hero-value small">${esc(master.slice(0, 90))}…</div><div class="hero-sub">master playlist · click to copy</div>`;
 
   const rows = links
@@ -258,10 +259,25 @@ function renderManifest(d: ExtractData): void {
     .join('');
 
   const idLine = d.scene_id ? `Scene ${esc(String(d.scene_id))}` : `ID ${esc(String(d.movie_id ?? ''))}`;
+  const sceneThumb = d.scene_thumb || (d.screenshots && d.screenshots.length ? d.screenshots[0].full : null);
+  const previewUrl = d.preview_url || '';
+  const playPreview = () =>
+    previewUrl &&
+    openPreview({ url: previewUrl, title: d.title || d.movie_title || 'Scene preview', pic: sceneThumb || undefined });
+
+  const heroThumb = sceneThumb
+    ? `<div class="hero-thumb-side" id="heroThumb" data-open="${esc(sceneThumb)}" title="${
+        previewUrl ? 'Click to play 720p preview' : 'Click to view full thumbnail'
+      }">
+        <img class="hero-thumb-img" src="${esc(sceneThumb)}" alt="Scene thumbnail" loading="lazy" />
+        <span class="hero-thumb-badge">${previewUrl ? '▶ 720p Preview' : 'Thumbnail'}</span>
+      </div>`
+    : '';
 
   resultBody.innerHTML = `
     <div class="section-label">[${esc(site)}] Manifest</div>
     <div class="hero-card" id="heroCopy" title="Click to copy">
+      ${heroThumb}
       <div class="hero-half">
         <div class="hero-value">${esc(t)}</div>
         <div class="hero-sub">${esc(d.studio || '')}</div>
@@ -290,11 +306,33 @@ function renderManifest(d: ExtractData): void {
     <div class="footer">
       <button class="action-pill-btn" id="btnCopyBest">Copy ${best ? best.height + 'p' : 'manifest'} <span class="action-pill-kbd">↵</span></button>
       <button class="action-pill-btn" id="btnRefresh">Refresh</button>
+      ${previewUrl ? `<button class="action-pill-btn" id="btnScenePreview">Preview 720p</button>` : ''}
+      ${sceneThumb ? `<button class="action-pill-btn" id="btnSceneThumb">Thumbnail</button>` : ''}
       ${d.covers && d.covers.length ? `<button class="action-pill-btn" id="btnCovers">Covers</button>` : ''}
     </div>`;
 
-  ($('heroCopy') as HTMLElement).onclick = () =>
+  ($('heroCopy') as HTMLElement).onclick = (e) => {
+    if ((e.target as HTMLElement).closest('#heroThumb')) return;
     void copyText(best ? best.url : master, best ? `Copied ${best.height}p link` : 'Copied master URL');
+  };
+  const bp = document.getElementById('btnScenePreview');
+  if (bp) bp.onclick = () => playPreview();
+  if (sceneThumb) {
+    const ht = document.getElementById('heroThumb');
+    if (ht) {
+      ht.onclick = (e) => {
+        e.stopPropagation();
+        if (previewUrl) playPreview();
+        else openViewer([{ thumb: sceneThumb, full: sceneThumb }], 0);
+      };
+    }
+    const bt = document.getElementById('btnSceneThumb');
+    if (bt) {
+      bt.onclick = () => {
+        openViewer([{ thumb: sceneThumb, full: sceneThumb }], 0);
+      };
+    }
+  }
   ($('btnCopyBest') as HTMLElement).onclick = () => void copyText(best ? best.url : master, 'Copied');
   ($('btnRefresh') as HTMLElement).onclick = () => void fetchExtract();
   const bc = document.getElementById('btnCovers');

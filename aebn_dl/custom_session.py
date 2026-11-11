@@ -11,6 +11,7 @@ except ImportError:
     from typing_extensions import Unpack
 
 # curl-cffi: Response/Session are in curl_cffi.requests for all supported versions
+from curl_cffi import CurlOpt
 from curl_cffi.requests import Response, Session
 
 try:
@@ -32,6 +33,10 @@ class CustomSession(Session):
         self.max_retries = max_retries
         self.initial_retry_delay = initial_retry_delay
         self.backoff_factor = backoff_factor
+        # Force IPv4 resolution (CURL_IPRESOLVE_V4 = 1) to avoid slow/hanging IPv6 connection attempts
+        opts = dict(self.curl_options) if getattr(self, "curl_options", None) else {}
+        opts[CurlOpt.IPRESOLVE] = 1
+        self.curl_options = opts
 
     def custom_request(self, method: Literal["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "TRACE", "PATCH", "QUERY"], url: str, *args, **kwargs) -> Response:
         """request wrapper with retries"""

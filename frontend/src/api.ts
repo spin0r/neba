@@ -56,6 +56,8 @@ export interface ExtractData {
   screenshots?: Screenshot[];
   screenshot_groups?: ScreenshotGroup[];
   caps_probe?: CapsProbe | null;
+  scene_thumb?: string | null;
+  preview_url?: string | null;
   performers?: string[];
   scene_count?: number;
   scenes?: SceneInfo[];

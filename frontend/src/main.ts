@@ -18,6 +18,7 @@ import {
 } from './extract';
 import { renderCookiesPage } from './cookies';
 import { isViewerOpen, step as viewerStep, closeViewer, copyCurrent } from './viewer';
+import { isPreviewOpen } from './preview';
 
 type Page = 'extract' | 'cookies';
 
@@ -102,6 +103,10 @@ document.addEventListener('keydown', (e) => {
   const tag = (e.target as HTMLElement).tagName;
   if (tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (document.querySelector('.modal-overlay')) return;
+
+  // Preview player owns the keyboard while open (arrows seek/volume and
+  // navigate its menus) — don't move or switch the page behind it.
+  if (isPreviewOpen() || (e.target as HTMLElement).closest?.('.preview-overlay')) return;
 
   // Viewer takes over all keys while open
   if (isViewerOpen()) {
