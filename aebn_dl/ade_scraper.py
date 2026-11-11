@@ -54,7 +54,7 @@ EA_SCENE_RE = re.compile(
     re.IGNORECASE,
 )
 EA_MOVIE_RE = re.compile(
-    r"/(\d+)/[^/]*?streaming-porn-videos\.html",
+    r"/(\d+)/[^/]*?(?:streaming-)?porn-videos\.html",
     re.IGNORECASE,
 )
 
@@ -81,6 +81,13 @@ _FRAME_RE = re.compile(
 # Any frame URL (used to pick the largest preview from a movie scene card)
 _FRAME_URL_RE = re.compile(
     r"https?://imgs\d?cdn\.adultempire\.com/frame/\d+\?[^\s\"\'\<\>]*?tc=\d+",
+    re.IGNORECASE,
+)
+
+# Scene backdrop/poster image: imgs{N}cdn.adultempire.com/backdrop/{width}/{item_id}_{scene_id}/{slug}.jpg
+# These are high-quality scene poster photos (not video frame caps).
+_BACKDROP_RE = re.compile(
+    r"https?://imgs\d?cdn\.adultempire\.com/backdrop/\d+/\d+/[^\s\"\'\<\>]+\.jpg",
     re.IGNORECASE,
 )
 
@@ -412,7 +419,18 @@ def resolve_ade_title(    base_title: str,
 
 
 def _extract_scene_thumbnail(html: str, target_tc: str | int | None = None) -> str | None:
-    """Extract full-size scene thumbnail (large image w=3840) from scene/clip HTML."""
+    """Extract scene thumbnail from scene/clip HTML (optimized for preview overlay).
+
+    Preference order:
+    1. Backdrop poster image (high-quality photo, scaled to 1920px for fast loading)
+    2. Frame CDN image at w=1280 (video frame cap matched by tc= parameter if supplied)
+    """
+    # 1. Try backdrop image first — highest quality dedicated poster photo
+    backdrop = _extract_scene_backdrop(html)
+    if backdrop:
+        return backdrop
+
+    # 2. Fall back to frame CDN URL
     if target_tc is not None:
         tc_m = re.search(
             r'https?://imgs\d?cdn\.adultempire\.com/frame/(\d+)\?[^\s\"\'\<\>]*?tc=' + re.escape(str(target_tc)),
@@ -422,9 +440,9 @@ def _extract_scene_thumbnail(html: str, target_tc: str | int | None = None) -> s
         if tc_m:
             url = tc_m.group(0)
             if re.search(r'[?&]w=\d+', url):
-                return re.sub(r'([?&]w=)\d+', r'\g<1>3840', url)
+                return re.sub(r'([?&]w=)\d+', r'\g<1>1280', url)
             sep = '&' if '?' in url else '?'
-            return f"{url}{sep}w=3840"
+            return f"{url}{sep}w=1280"
 
     patterns = [
         r'<meta\s+property=[\'\"]og:image[\'\"]\s+content=[\'\"]([^\'\"]*?/frame/\d+[^\'\"]*)[\'\"]',
@@ -438,10 +456,51 @@ def _extract_scene_thumbnail(html: str, target_tc: str | int | None = None) -> s
         if m:
             url = m.group(1) if m.lastindex else m.group(0)
             if re.search(r'[?&]w=\d+', url):
-                return re.sub(r'([?&]w=)\d+', r'\g<1>3840', url)
+                return re.sub(r'([?&]w=)\d+', r'\g<1>1280', url)
             sep = '&' if '?' in url else '?'
-            return f"{url}{sep}w=3840"
+            return f"{url}{sep}w=1280"
     return None
+
+
+def _extract_scene_backdrop(html: str) -> str | None:
+    """Extract the scene backdrop/poster image URL from HTML.
+
+    Backdrop URLs follow the pattern:
+        imgs{N}cdn.adultempire.com/backdrop/{width}/{item_id}_{scene_id}/{slug}.jpg
+
+    These are high-quality dedicated poster photos for the scene — preferred
+    over video-frame caps because they are actual photographs.
+    We upgrade any width in the URL to 6000 (the largest tier offered).
+    """
+    if not html:
+        return None
+
+    # Look in meta tags and JSON-LD first (most reliable)
+    priority_patterns = [
+        r'<meta\s+property=[\'\"]og:image[\'\"]\s+content=[\'\"]([^\'\"]*?/backdrop/[^\'\"]*)[\'\"]',
+        r'<link\s+rel=[\'\"]image_src[\'\"]\s+href=[\'\"]([^\'\"]*?/backdrop/[^\'\"]*)[\'\"]',
+        r'[\'\"]thumbnailUrl[\'\"]\s*:\s*[\'\"]([^\'\"]*?/backdrop/[^\'\"]*)[\'\"]',
+        r'[\'\"]image[\'\"]\s*:\s*[\'\"]([^\'\"]*?/backdrop/[^\'\"]*)[\'\"]',
+    ]
+    for pat in priority_patterns:
+        m = re.search(pat, html, re.I)
+        if m:
+            return _upgrade_backdrop_width(m.group(1))
+
+    # Broad scan: any backdrop CDN URL in the page
+    m = _BACKDROP_RE.search(html)
+    if m:
+        return _upgrade_backdrop_width(m.group(0))
+
+    return None
+
+
+def _upgrade_backdrop_width(url: str, width: int = 1920) -> str:
+    """Upgrade the width tier in a backdrop CDN URL (optimized for preview overlay)."""
+    if not url:
+        return url
+    # Pattern: /backdrop/{width}/  →  /backdrop/{new_width}/
+    return re.sub(r'(/backdrop/)\d+(/)', rf'\g<1>{width}\2', url)
 
 
 def _extract_ea_screenshots(html: str, master: str | int | None = None) -> list[dict[str, str]]:
@@ -572,14 +631,12 @@ def _fetch_full_scene_shots(session: CustomSession, base_host: str,
 
 
 def _extract_movie_page_blocks(html: str) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
-    """Split an ADE movie page into full-list stills + per-scene blocks.
+    """Split an ADE/EA movie page into full-list stills + per-scene blocks.
 
     Movie pages (e.g. /4997491/mon-amour-...-porn-videos.html) render
     ``<a name=\"scene_<clipId>\">`` anchors, one block per scene, each with
-    its own stills and an ``/clip/<id>/<slug>-streaming-scene.html`` title
-    link. The top chunk (before the first anchor) is the full-movie list —
-    on Mon Amour that's 1 still vs 8 per scene, i.e. scenes carry more
-    screenshots than the full list.
+    its own stills and an ``/clip/<id>/`` or ``/shop/<id>/`` title link.
+    The top chunk (before the first anchor) is the full-movie list.
     Returns (full_shots, [{clip_id, title, shots}]).
     """
     parts = re.split(r'<a name="scene_(\d+)"', html or "")
@@ -589,7 +646,7 @@ def _extract_movie_page_blocks(html: str) -> tuple[list[dict[str, str]], list[di
         clip_id = parts[i]
         block = parts[i + 1] if i + 1 < len(parts) else ""
         title_m = re.search(
-            r"/clip/" + re.escape(clip_id) + r"/[^\"]*?\"[^>]*>(.*?)</a>",
+            r"/(?:clip|shop)/" + re.escape(clip_id) + r"/[^\"]*?\"[^>]*>(.*?)</a>",
             block, re.S | re.I,
         )
         title = re.sub(r"\s+", " ", html_unescape(title_m.group(1)) if title_m else "").strip()
@@ -919,7 +976,22 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
     if clip_match or ea_scene_match:
         logger.info("Fetching clip page: %s", url)
         resp = session.get(url)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            # Log response details for debugging
+            logger.error("HTTP %d fetching %s: %s", resp.status_code, url, e)
+            if resp.status_code == 500:
+                # EA/ADE sometimes return 500 instead of 401/403 for auth issues
+                preview = resp.text[:800] if resp.text else "(empty)"
+                logger.error("Response preview: %s", preview)
+                site_name, box = _site_for_url(url)
+                if "elegantangel.com" in url.lower():
+                    raise ValueError(
+                        f"{site_name}: Server returned HTTP 500. This may indicate missing or expired "
+                        f"cookies. {_upper_first(_cookie_hint(cookies_str, site_name, box))}"
+                    ) from e
+            raise
         html = resp.text
         params = _extract_player_params(html)
         if not params or not params.get("key") or not params.get("sig"):
@@ -969,7 +1041,8 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
             try:
                 # Skip category links like /2813/category/...-porn-videos.html —
                 # they match the movie pattern but are unrelated listing pages.
-                pm = re.search(r'href="(/(\d+)/(?!category/)([^"]+?)-porn-videos\.html)"', html or "")
+                # Also handle elegantangel.com /shop/{id}/... URLs.
+                pm = re.search(r'href="((?:/shop)?/(\d+)/(?!category/)([^"]+?)-porn-videos\.html)"', html or "")
                 if pm and cur_scene_id:
                     u = urlparse(url)
                     movie_url = f"{u.scheme or 'https'}://{u.netloc or 'www.adultdvdempire.com'}{pm.group(1)}"
@@ -988,10 +1061,15 @@ def get_ade_manifest(url: str, cookies_str: str | None = None) -> dict[str, Any]
                                        if re.sub(r"\W+", " ", w.get("title", "")).strip().lower() == want),
                                       None)
                         if mw and mw.get("frame"):
-                            scene_thumb = _upgrade_frame_width(mw["frame"], 3840)
+                            # Only use the frame widget as thumbnail if no backdrop
+                            # photo is available from the clip page itself.
+                            frame_thumb = _upgrade_frame_width(mw["frame"], 1280)
                             tc_m = re.search(r"[?&]tc=(\d+)", mw["frame"])
-                            logger.info("Scene thumb from parent movie scene %s: tc=%s (w=3840)",
+                            logger.info("Scene thumb (frame) from parent movie scene %s: tc=%s (w=1280)",
                                         mw.get("scene_id"), tc_m.group(1) if tc_m else "?")
+                            # Prefer the clip page's own backdrop over the movie-page frame cap
+                            if not scene_thumb:
+                                scene_thumb = _extract_scene_backdrop(html) or frame_thumb
                         _mfull, mblocks = _extract_movie_page_blocks(mresp.text)
                         blk = next((b for b in mblocks
                                     if str(b.get("clip_id")) == str(cur_scene_id)), None)

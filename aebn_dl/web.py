@@ -874,7 +874,7 @@ class Handler(BaseHTTPRequestHandler):
                 ).result(timeout=600)
                 self._send_json({"success": True, "data": data})
             except Exception as e:
-                logger.warning("extract failed: %s", e)
+                logger.warning("extract failed: %s", e, exc_info=True)
                 self._send_json({"success": False, "error": str(e)}, 200)
             return
 
