@@ -10,6 +10,10 @@ const DPLAYER_CDN = 'https://cdn.jsdelivr.net/npm/dplayer-enhanced@beta/dist/';
 
 interface DPlayerHandle {
   destroy(): void;
+  fullScreen?: {
+    isFullScreen(type?: 'browser' | 'web'): boolean;
+    cancel(type?: 'browser' | 'web'): void;
+  };
 }
 
 type DPlayerCtor = new (options: Record<string, unknown>) => DPlayerHandle;
@@ -291,9 +295,19 @@ export function closePlay(): void {
     hls = null;
   }
   if (player) {
+    // DPlayer's destroy() does not leave "web fullscreen" (the `w` key):
+    // the body keeps `dplayer-web-fullscreen-fix` (position: fixed; left: 0),
+    // which shifts the whole page to the top-left after the player is gone.
+    try {
+      if (player.fullScreen?.isFullScreen('web')) player.fullScreen.cancel('web');
+    } catch {
+      // ignore: fall through to the class cleanup below
+    }
     player.destroy();
     player = null;
   }
+  // Belt-and-braces for older DPlayer builds / partial cancels.
+  document.body.classList.remove('dplayer-web-fullscreen-fix');
   if (overlay) {
     overlay.remove();
     overlay = null;
