@@ -79,10 +79,9 @@ function qualityLabel(height: number): string {
   return height > 0 ? `${height}p` : 'Auto';
 }
 
-/** Prefer 720p, otherwise the best (list is sorted high → low by the backend). */
-function pickDefault(list: PlayVariant[]): number {
-  const exact = list.findIndex((v) => v.height === 720);
-  return exact >= 0 ? exact : 0;
+/** Highest quality first — the backend lists variants high → low. */
+function sortVariants(list: PlayVariant[]): PlayVariant[] {
+  return [...list].sort((a, b) => b.height - a.height);
 }
 
 function paintQuality(): void {
@@ -154,9 +153,9 @@ export async function openPlay(src: PlaySource): Promise<void> {
   closePlay();
   const seq = ++openSeq;
 
-  variants = src.variants.filter((v) => !!v.url);
+  variants = sortVariants(src.variants.filter((v) => !!v.url));
   if (!variants.length) return;
-  activeIndex = pickDefault(variants);
+  activeIndex = 0; // highest quality first
   switchSeq = 0;
 
   overlay = document.createElement('div');
