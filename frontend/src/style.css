@@ -1198,8 +1198,8 @@ body::after {
 }
 .viewer-stage img.loading { opacity: 0.3; }
 
-/* HLS scene preview (720p, loaded straight from the CDN) */
-.preview-overlay {
+/* HLS stream play (extracted m3u8, loaded straight from the CDN) */
+.play-overlay {
   position: fixed;
   inset: 0;
   z-index: 420;
@@ -1211,10 +1211,10 @@ body::after {
   background-repeat: no-repeat;
   background-position: center;
   outline: none;
-  animation: previewOverlayIn 0.18s ease both;
+  animation: playOverlayIn 0.18s ease both;
 }
 /* Dim the thumbnail background so it doesn't flash bright behind the player */
-.preview-overlay::before {
+.play-overlay::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -1225,24 +1225,25 @@ body::after {
   pointer-events: none;
 }
 /* Ensure the overlay's children sit above the dimming layer */
-.preview-overlay > * { position: relative; z-index: 1; }
-@keyframes previewOverlayIn {
+.play-overlay > * { position: relative; z-index: 1; }
+@keyframes playOverlayIn {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-.preview-top {
+.play-top {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   z-index: 2;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 18px;
+  flex-wrap: wrap;
 }
-.preview-title {
+.play-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1253,42 +1254,58 @@ body::after {
   font-weight: 700;
   letter-spacing: 0.01em;
 }
-.preview-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.preview-badge {
+.play-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+.play-quality { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.play-q {
   padding: 5px 9px;
-  background: var(--lime);
-  border: 2px solid var(--ink);
-  box-shadow: 2px 2px 0 var(--pink);
-  color: var(--ink);
+  background: rgba(13, 13, 13, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  color: var(--paper);
   font-family: var(--mono);
   font-size: 10.5px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
-.preview-player {
+.play-q:hover { border-color: var(--paper); }
+.play-q.active {
+  background: var(--lime);
+  border-color: var(--ink);
+  box-shadow: 2px 2px 0 var(--pink);
+  color: var(--ink);
+}
+.play-player {
   width: min(1200px, 92vw);
   height: min(675px, 84vh);
   background: #000;
   border: 4px solid var(--paper);
   box-shadow: 10px 10px 0 rgba(0, 0, 0, 0.65);
 }
-.preview-player .dplayer {
+.play-player .dplayer {
   width: 100%;
   height: 100%;
 }
-.preview-player .dplayer-video-wrap video {
+.play-player .dplayer-video-wrap video {
   object-fit: contain;
 }
 /* DPlayer adds its state classes to the container we pass in, so the
-   state selectors combine with .preview-player on the same element. */
-.preview-player.dplayer-loading .dplayer-controller,
-.preview-player.dplayer-loading .dplayer-controller-mask,
-.preview-player.dplayer-loading .dplayer-bezel {
+   state selectors combine with .play-player on the same element. */
+.play-player.dplayer-loading .dplayer-controller,
+.play-player.dplayer-loading .dplayer-controller-mask,
+.play-player.dplayer-loading .dplayer-bezel {
   opacity: 0 !important;
   pointer-events: none;
 }
 /* DPlayer flashes a big play badge when autoplay kicks in — skip it. */
-.preview-player.dplayer-playing .dplayer-bezel {
+.play-player.dplayer-playing .dplayer-bezel {
   opacity: 0 !important;
   pointer-events: none;
 }

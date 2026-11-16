@@ -4,7 +4,7 @@ import { api, AuthError } from './api';
 import type { ExtractData } from './api';
 import { $, esc, copyText, fmtRes } from './ui';
 import { openViewer } from './viewer';
-import { openPreview } from './preview';
+import { openPlay } from './play';
 
 export type Mode = 'manifest' | 'info' | 'covers' | 'screenshots';
 
@@ -174,6 +174,15 @@ function render(d: ExtractData): void {
   return renderManifest(d);
 }
 
+/** Variant playlists may be relative to the master; resolve before handing to hls.js. */
+function resolveUrl(url: string, base: string): string {
+  try {
+    return new URL(url, base || window.location.href).href;
+  } catch {
+    return url;
+  }
+}
+
 function qualityLabel(height: number): string {
   if (height >= 2160) return '4K UHD';
   if (height >= 1080) return 'Full HD';
@@ -260,17 +269,31 @@ function renderManifest(d: ExtractData): void {
 
   const idLine = d.scene_id ? `Scene ${esc(String(d.scene_id))}` : `ID ${esc(String(d.movie_id ?? ''))}`;
   const sceneThumb = d.scene_thumb || (d.screenshots && d.screenshots.length ? d.screenshots[0].full : null);
-  const previewUrl = d.preview_url || '';
-  const playPreview = () =>
-    previewUrl &&
-    openPreview({ url: previewUrl, title: d.title || d.movie_title || 'Scene preview', pic: sceneThumb || undefined });
+
+  // Extracted variant m3u8 streams (backend sorts them high → low). Play these
+  // directly in the in-site player, with the quality picker in its top bar.
+  const manifestBase = d.manifest_url || '';
+  const variants = (d.preferred_links || [])
+    .filter((l) => !!l.url)
+    .map((l) => ({ height: l.height, url: resolveUrl(l.url, manifestBase) }));
+  if (!variants.length && /\.m3u8(?:[?#]|$)/i.test(manifestBase)) {
+    variants.push({ height: 0, url: manifestBase });
+  }
+  const canPlay = variants.length > 0;
+  const startPlay = () =>
+    canPlay &&
+    openPlay({
+      variants,
+      title: d.title || d.movie_title || 'Stream player',
+      pic: sceneThumb || undefined,
+    });
 
   const heroThumb = sceneThumb
     ? `<div class="hero-thumb-side" id="heroThumb" data-open="${esc(sceneThumb)}" title="${
-        previewUrl ? 'Click to play 720p preview' : 'Click to view full thumbnail'
+        canPlay ? 'Click to play the stream' : 'Click to view full thumbnail'
       }">
         <img class="hero-thumb-img" src="${esc(sceneThumb)}" alt="Scene thumbnail" loading="lazy" />
-        <span class="hero-thumb-badge">${previewUrl ? '▶ 720p Preview' : 'Thumbnail'}</span>
+        <span class="hero-thumb-badge">${canPlay ? '▶ Play' : 'Thumbnail'}</span>
       </div>`
     : '';
 
@@ -306,7 +329,7 @@ function renderManifest(d: ExtractData): void {
     <div class="footer">
       <button class="action-pill-btn" id="btnCopyBest">Copy ${best ? best.height + 'p' : 'manifest'} <span class="action-pill-kbd">↵</span></button>
       <button class="action-pill-btn" id="btnRefresh">Refresh</button>
-      ${previewUrl ? `<button class="action-pill-btn" id="btnScenePreview">Preview 720p</button>` : ''}
+      ${canPlay ? `<button class="action-pill-btn" id="btnScenePlay">Play</button>` : ''}
       ${sceneThumb ? `<button class="action-pill-btn" id="btnSceneThumb">Thumbnail</button>` : ''}
       ${d.covers && d.covers.length ? `<button class="action-pill-btn" id="btnCovers">Covers</button>` : ''}
     </div>`;
@@ -315,14 +338,14 @@ function renderManifest(d: ExtractData): void {
     if ((e.target as HTMLElement).closest('#heroThumb')) return;
     void copyText(best ? best.url : master, best ? `Copied ${best.height}p link` : 'Copied master URL');
   };
-  const bp = document.getElementById('btnScenePreview');
-  if (bp) bp.onclick = () => playPreview();
+  const bp = document.getElementById('btnScenePlay');
+  if (bp) bp.onclick = () => startPlay();
   if (sceneThumb) {
     const ht = document.getElementById('heroThumb');
     if (ht) {
       ht.onclick = (e) => {
         e.stopPropagation();
-        if (previewUrl) playPreview();
+        if (canPlay) startPlay();
         else openViewer([{ thumb: sceneThumb, full: sceneThumb }], 0);
       };
     }
