@@ -1,4 +1,4 @@
-"""Standalone web server + JSON API mirroring the Telegram bot actions.
+"""Web server and JSON API for the browser UI.
 
 Serves the Vite + TypeScript frontend (``frontend/dist``, built with
 ``npm run build``) and exposes:
@@ -15,10 +15,7 @@ Serves the Vite + TypeScript frontend (``frontend/dist``, built with
 - ``GET  /api/thpaste?site=ade``       pull site paste content from Thpaste
 - ``POST /api/thpaste``      ``{"site": ..., "content": ...}`` push to Thpaste
 
-Only the standard library is used so this works without the ``bot`` extra.
-Run standalone with ``aebndl-web`` (or ``python -m aebn_dl.web``).
-When the Telegram bot runs with ``PORT`` set, it serves this same app in a
-background thread instead of the plain ``OK`` health responder.
+Run with ``aebndl-web`` (or ``python -m aebn_dl.web``).
 """
 from __future__ import annotations
 
@@ -71,14 +68,13 @@ except ImportError:
 
 WEB_PASSWORD = os.getenv("WEB_PASSWORD", "")
 DEFAULT_PROXY = os.getenv("AEBN_PROXY", "")
-DEFAULT_THREADS = int(os.getenv("AEBN_THREADS", "5"))
 
 executor = ThreadPoolExecutor(max_workers=8)
 _auth_tokens: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
-# Small helpers (telegram-free copies of the bot logic)
+# Authentication and cookie storage
 # ---------------------------------------------------------------------------
 
 def _is_open() -> bool:
@@ -138,14 +134,8 @@ def _load_all_cookies() -> dict:
         return {}
 
 
-def _load_saved_cookies() -> str:
-    """Legacy global session (key "0", shared with the Telegram bot)."""
-    return _load_all_cookies().get("0", "")
-
-
 def _load_site_cookies(site: str) -> str:
-    """Site session. "ade" falls back to the legacy global key ("0", shared
-    with the Telegram bot); "ea" and "dvd" are strictly separate."""
+    """Read the site session, with a fallback for older ADE cookie files."""
     data = _load_all_cookies()
     if site == "ade":
         return data.get("ade", "") or data.get("0", "")
@@ -156,9 +146,7 @@ def _save_site_cookies(site: str, cookie_text: str) -> None:
     data = _load_all_cookies()
     data[site] = cookie_text
     if site == "ade":
-        # Mirror ADE cookies to the legacy global key so the Telegram bot
-        # (which reads key "0") keeps working with existing logic.
-        data["0"] = cookie_text
+        data.pop("0", None)
     COOKIES_FILE.write_text(json.dumps(data, indent=2))
 
 
@@ -485,7 +473,7 @@ def _pick_preferred(variants: dict[int, str]) -> list[tuple[int, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Extraction (mirrors bot._blocking_m3u8 / _blocking_ade_m3u8 / do_info)
+# Extraction
 # ---------------------------------------------------------------------------
 
 def _extract_aebn(url: str) -> dict[str, Any]:
@@ -941,15 +929,6 @@ def create_server(port: int) -> ThreadingHTTPServer:
 def run_blocking(port: int) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s|%(levelname)s|%(message)s", datefmt="%H:%M:%S")
     create_server(port).serve_forever()
-
-
-def start_in_background(port: int) -> ThreadingHTTPServer:
-    """Serve the web UI in a daemon thread (used by the Telegram bot entrypoint)."""
-    import threading
-
-    server = create_server(port)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
 
 
 def main():

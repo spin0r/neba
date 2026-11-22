@@ -55,59 +55,14 @@ To download scene 2 in 720p resolution
 | `-t`  | `--threads`             | Threads for concurrent downloads(default=5)                                                                                                                                                                                                         |
 | `-l`  | `--log-level`           | Set the logging level (default: INFO) Any level above INFO would also disable progress bars                                                                                                                                                                        |
 
-## Telegram Bot
-
-### Install with bot extras
-
-```
-pip install git+https://github.com/hyper440/aebn-vod-downloader -U --extra bot
-# or locally
-pip install -e ".[bot]"
-```
-
-### Configuration
-
-Create `aebn_dl/.env` from `aebn_dl/.env.example` or export env vars:
-
-```
-TELEGRAM_BOT_TOKEN=123456:ABC-DEF...  # from @BotFather
-ALLOWED_USER_IDS=123456789            # optional, comma-separated; empty = allow all
-AEBN_OUTPUT_DIR=./output_dir
-AEBN_WORK_DIR=./work_dir
-AEBN_PROXY=socks5://user:pass@ip:port # optional, same as CLI -p
-MAX_CONCURRENT_DOWNLOADS=2
-MAX_TELEGRAM_FILESIZE_MB=50           # 50 for hosted Bot API, 2000 for self-hosted
-```
-
-### Run
-
-```
-export TELEGRAM_BOT_TOKEN="123:ABC"
-aebndl-bot
-# or
-python -m aebn_dl.bot
-```
-
-### Bot Commands
-
-| Command | Description |
-| ------- | ----------- |
-| `/start`, `/help` | Show help |
-| `/m3u8 <url>` / `/dash` / `/mpd` / `/manifest` | **Primary** — return direct DASH manifest URL (m3u8 equivalent) without downloading. Includes `ffmpeg`/`mpv` one-liners |
-| `/info <url>` | Show title, studio, duration, resolutions, scenes + button to get m3u8 |
-| `/covers <url>` | Download front/back covers only |
-| `/dl <url> [720] [scene:2] [--covers] [--split-scenes]` | Optional full download (kept for completeness) |
-| Paste URL directly | Auto-returns **m3u8/DASH URL** (no download) |
-
-Works with **AEBN**, **AdultDVDEmpire / AdultEmpire**, **Elegant Angel**, and **DVDErotik (`us.dvderotik.com`)** links (same Empire backend).
-
 ## Web UI
 
-A Calcast-style command-bar frontend that mirrors the bot, served on `$PORT`
-(the bot serves it automatically in the background; standalone via `aebndl-web`):
+The browser UI uses a same-origin Python API. Build the frontend before starting the server.
 
 ```
-pip install -e ".[bot]"        # web needs no extra deps (stdlib only)
+pip install -e .
+npm --prefix frontend ci
+npm --prefix frontend run build
 WEB_PASSWORD=secret aebndl-web # optional password lock, else open
 # open http://localhost:8000
 ```
@@ -118,7 +73,7 @@ WEB_PASSWORD=secret aebndl-web # optional password lock, else open
 - **Cookies button**: paste Netscape cookie exports for `adultdvdempire.com`,
   `elegantangel.com`, or `us.dvderotik.com`, with **Import** (file upload), **Export** (download
   `.txt`), Save in browser (`localStorage`, sent per-request) or Save to
-  server (shared fallback, also used by the bot). Shows expiry + PPM balance.
+  server (shared fallback). Shows expiry + PPM balance.
 - Recent links kept as history; optional `WEB_PASSWORD` env locks the UI
   behind a login view.
 
@@ -148,20 +103,11 @@ THPASTE_API_KEY=tp_...           # Thpaste dashboard → API keys (never commit)
   when an API key is configured for that site.
 - Paste ids created by the UI are kept in `aebn_dl/thpaste_state.json`; set
   `THPASTE_<SITE>_ID` to pin an existing paste instead.
-- Set `ADE_COOKIES_URL` to the ADE paste's `raw_url` if the bot should load
-  its cookies from Thpaste at startup.
+- Set `ADE_COOKIES_URL` to the ADE paste's raw URL to use it as a fallback.
 
-Inline buttons: `📄 Get m3u8 / DASH URL` (primary), per-resolution shortcuts, `Refresh m3u8`, `Show info`.
+### Docker
 
-Manifest is fetched via `POST https://{type}.aebn.com/{type}/deliver` (`movieId`, `format=DASH`) → `content["url"]` (`aebn_dl/manifest_parser.py:92`), same as `Manifest._get_new_manifest_url()`. The bot runs `_blocking_m3u8()` in `ThreadPoolExecutor` and returns `manifest_url` + `base_stream_url` as code-block for easy copy.
-
-### Docker example
-
-```dockerfile
-FROM python:3.11-slim
-RUN apt-get update && apt-get install -y ffmpeg
-COPY . /app
-WORKDIR /app
-RUN pip install -e ".[bot]"
-CMD ["aebndl-bot"]
+```sh
+docker build -t aebn-web .
+docker run --rm -p 8000:8000 aebn-web
 ```

@@ -1,13 +1,10 @@
 services:
   - type: web
-    name: aebn-bot
+    name: aebn-web
     runtime: docker
     plan: free
+    healthCheckPath: /health
     envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: ALLOWED_USER_IDS
-        sync: false
       - key: ADE_COOKIES_URL
         sync: false
       - key: THPASTE_API_KEY

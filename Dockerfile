@@ -17,6 +17,6 @@ WORKDIR /app
 COPY . /app
 COPY --from=frontend /build/dist /app/frontend/dist
 
-RUN pip install --no-cache-dir -e ".[bot]"
+RUN pip install --no-cache-dir -e .
 
-CMD ["aebndl-bot"]
+CMD ["aebndl-web"]
