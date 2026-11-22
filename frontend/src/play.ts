@@ -209,9 +209,20 @@ export async function openPlay(src: PlaySource): Promise<void> {
     if ((e.target as HTMLElement).classList.contains('play-overlay')) closePlay();
   });
   escHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') closePlay();
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+
+    const fullScreen = player?.fullScreen;
+    if (fullScreen?.isFullScreen('web')) {
+      fullScreen.cancel('web');
+      return;
+    }
+    closePlay();
   };
-  document.addEventListener('keydown', escHandler);
+  // Check wide mode before DPlayer can handle the same key.
+  document.addEventListener('keydown', escHandler, true);
 
   try {
     const [hlsModule] = await Promise.all([import('hls.js'), loadDPlayer()]);
@@ -286,7 +297,7 @@ export async function openPlay(src: PlaySource): Promise<void> {
 export function closePlay(): void {
   openSeq++;
   if (escHandler) {
-    document.removeEventListener('keydown', escHandler);
+    document.removeEventListener('keydown', escHandler, true);
     escHandler = null;
   }
   if (hls) {
