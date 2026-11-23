@@ -6,7 +6,7 @@
 import type Hls from 'hls.js';
 import { $ } from './ui';
 
-const DPLAYER_CDN = 'https://cdn.jsdelivr.net/npm/dplayer-enhanced@beta/dist/';
+const DPLAYER_BETA = 'https://registry.npmjs.org/dplayer-enhanced/beta';
 
 interface DPlayerHandle {
   destroy(): void;
@@ -50,28 +50,49 @@ let switchSeq = 0;
 let openSeq = 0;
 let qualityBtns: HTMLElement[] = [];
 
-function loadDPlayer(): Promise<void> {
-  if (window.DPlayer) return Promise.resolve();
-  if (dplayerPromise) return dplayerPromise;
+async function loadDPlayerAssets(): Promise<void> {
+  const response = await fetch(DPLAYER_BETA, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Could not resolve dplayer-enhanced@beta (HTTP ${response.status})`);
+  }
+  const release = await response.json();
+  const version = release?.version;
+  if (typeof version !== 'string' || !version) {
+    throw new Error('npm did not return a version for dplayer-enhanced@beta');
+  }
 
-  dplayerPromise = new Promise((resolve, reject) => {
-    if (!document.querySelector('link[data-dplayer]')) {
-      const css = document.createElement('link');
-      css.rel = 'stylesheet';
-      css.href = `${DPLAYER_CDN}DPlayer.min.css`;
-      css.dataset.dplayer = '1';
-      document.head.appendChild(css);
-    }
-    const script = document.createElement('script');
-    script.src = `${DPLAYER_CDN}DPlayer.min.js`;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => {
+  const cdn = `https://cdn.jsdelivr.net/npm/dplayer-enhanced@${encodeURIComponent(version)}/dist/`;
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = `${cdn}DPlayer.css`;
+
+  const script = document.createElement('script');
+  script.src = `${cdn}DPlayer.min.js`;
+  script.async = true;
+
+  const loaded = Promise.all([css, script].map((asset) => new Promise<void>((resolve, reject) => {
+    asset.addEventListener('load', () => resolve(), { once: true });
+    asset.addEventListener('error', () => reject(new Error('Failed to load DPlayer assets')), { once: true });
+  })));
+  document.head.append(css, script);
+
+  try {
+    await loaded;
+    if (!window.DPlayer) throw new Error('DPlayer script did not initialize');
+  } catch (error) {
+    css.remove();
+    script.remove();
+    throw error;
+  }
+}
+
+function loadDPlayer(): Promise<void> {
+  if (!dplayerPromise) {
+    dplayerPromise = loadDPlayerAssets().catch((error) => {
       dplayerPromise = null;
-      reject(new Error('Failed to load DPlayer'));
-    };
-    document.head.appendChild(script);
-  });
+      throw error;
+    });
+  }
   return dplayerPromise;
 }
 
