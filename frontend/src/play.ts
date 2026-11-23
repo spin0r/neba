@@ -72,7 +72,15 @@ async function loadDPlayerAssets(): Promise<void> {
 
   const loaded = Promise.all([css, script].map((asset) => new Promise<void>((resolve, reject) => {
     asset.addEventListener('load', () => resolve(), { once: true });
-    asset.addEventListener('error', () => reject(new Error('Failed to load DPlayer assets')), { once: true });
+    asset.addEventListener('error', () => {
+      // Older releases can report an error for an optional CSS import.
+      if (asset === css && css.sheet) {
+        resolve();
+        return;
+      }
+      const file = asset === css ? 'stylesheet' : 'script';
+      reject(new Error(`Failed to load DPlayer ${file}`));
+    }, { once: true });
   })));
   document.head.append(css, script);
 
