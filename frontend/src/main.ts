@@ -18,7 +18,7 @@ import {
 } from './extract';
 import { renderCookiesPage } from './cookies';
 import { isViewerOpen, step as viewerStep, closeViewer, copyCurrent } from './viewer';
-import { isPlayOpen } from './play';
+import { closePlay, isPlayOpen } from './play';
 
 type Page = 'extract' | 'cookies';
 
@@ -82,6 +82,7 @@ document.addEventListener('paste', (e: ClipboardEvent) => {
   e.preventDefault();
 
   const url = m[0].replace(/[)\]}>'"]+$/, ''); // strip trailing punctuation
+  if (isPlayOpen()) closePlay();
   const input = $('urlInput') as HTMLInputElement;
   input.value = url;
 
