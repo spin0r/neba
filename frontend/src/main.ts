@@ -13,7 +13,7 @@ import {
   fetchExtract,
   moveSelection,
   activateSelection,
-  resetSelection,
+  escapeExtract,
   cycleMode,
 } from './extract';
 import { renderCookiesPage } from './cookies';
@@ -136,8 +136,9 @@ document.addEventListener('keydown', (e) => {
       if (resultsVisible() && page === 'extract' && activateSelection()) e.preventDefault();
     }
   } else if (e.key === 'Escape') {
-    resetSelection();
-    document.querySelectorAll('.selected').forEach((el) => el.classList.remove('selected'));
+    if (page !== 'extract' || !authed || e.repeat) return;
+    e.preventDefault();
+    escapeExtract();
   }
 });
 

@@ -23,6 +23,7 @@ const DVD_COOKIES = 'ae_cookies_dvd';
 
 let mode: Mode = 'manifest';
 let lastData: ExtractData | null = null;
+let extractRequestId = 0;
 
 const urlInput = $('urlInput') as HTMLInputElement;
 const resultBody = $('resultBody');
@@ -93,17 +94,21 @@ export function renderHist(): void {
 export async function fetchExtract(): Promise<void> {
   const url = urlInput.value.trim();
   if (!url) return;
+  const requestId = ++extractRequestId;
+  resetSelection();
   histBody.classList.remove('visible');
   resultBody.classList.add('visible');
   resultBody.innerHTML = '<div class="loading"><div class="spinner"></div>Fetching manifest…</div>';
   try {
     const c = browserCookies();
     const r = await api.extract(url, mode, c.ade, c.ea, c.dvd, c.legacy);
+    if (requestId !== extractRequestId) return;
     if (!r.success || !r.data) throw new Error(r.error || 'Extraction failed');
     lastData = r.data;
     pushHist(r.data.source_url || url, r.data.movie_title || r.data.title || '');
     render(r.data);
   } catch (e) {
+    if (requestId !== extractRequestId) return;
     if (e instanceof AuthError) {
       window.dispatchEvent(new CustomEvent('ae:locked'));
       return;
@@ -137,8 +142,30 @@ function paintSelection(): void {
   if (cur) cur.scrollIntoView({ block: 'nearest' });
 }
 
-export function resetSelection(): void {
+function resetSelection(): void {
   selIndex = -1;
+}
+
+export function escapeExtract(): void {
+  const selected = resultBody.classList.contains('visible') && resultBody.querySelector('.selected');
+  resetSelection();
+  if (selected) {
+    paintSelection();
+    return;
+  }
+  if (!urlInput.value && !resultBody.innerHTML) return;
+
+  extractRequestId++;
+  lastData = null;
+  probeOn = false;
+  probeKey = '';
+  urlInput.value = '';
+  resultBody.innerHTML = '';
+  $('srcHint').textContent = '';
+  setMode('manifest');
+  renderHist();
+  refreshExtractVisibility(true);
+  urlInput.focus();
 }
 
 export function markSelected(el: HTMLElement): void {
